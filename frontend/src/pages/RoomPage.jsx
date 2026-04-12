@@ -22,52 +22,54 @@ export default function RoomPage() {
   const [connected, setConnected]     = useState(false);
 
   const stompClientRef = useRef(null);
-  const [stompReady, setStompReady] = useState(false);
 
-  // ── Fetch room ─────────────────────────────────────────────────────────────
+  // ── Fetch room info ───────────────────────────────────────────────────────
+
   useEffect(() => {
-    api.get(`/api/rooms/${roomId}`)
-      .then((res) => setRoom(res.data))
-      .catch(() => setError('Room not found or you do not have access.'))
-      .finally(() => setLoading(false));
+    const fetchRoom = async () => {
+      try {
+        const res = await api.get(`/api/rooms/${roomId}`);
+        setRoom(res.data);
+      } catch {
+        setError('Room not found or you do not have access.');
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchRoom();
   }, [roomId]);
 
-  // ── Shared WebSocket connection ────────────────────────────────────────────
+  // ── Single shared WebSocket connection ────────────────────────────────────
+
   useEffect(() => {
     const token = localStorage.getItem('token');
 
     const client = new Client({
-      webSocketFactory: () =>
-        new SockJS('http://localhost:8080/ws'),
+      webSocketFactory: () => new SockJS('http://localhost:8080/ws'),
       connectHeaders: { Authorization: `Bearer ${token}` },
       reconnectDelay: 5000,
 
       onConnect: () => {
         setConnected(true);
-        setStompReady(true);
 
+        // Announce join
         client.publish({
           destination: `/app/room/${roomId}/join`,
           body: JSON.stringify({}),
         });
 
+        // Subscribe to presence
         client.subscribe(
           `/topic/room/${roomId}/presence`,
           (frame) => {
-            const presence = JSON.parse(frame.body);
-            handlePresenceUpdate(presence);
+            const p = JSON.parse(frame.body);
+            handlePresenceUpdate(p);
           }
         );
       },
 
-      onDisconnect: () => {
-        setConnected(false);
-        setStompReady(false);
-      },
-      onStompError: () => {
-        setConnected(false);
-        setStompReady(false);
-      },
+      onDisconnect: () => setConnected(false),
+      onStompError:  () => setConnected(false),
     });
 
     client.activate();
@@ -97,10 +99,11 @@ export default function RoomPage() {
     }
   }, []);
 
-  const copyLink     = () => navigator.clipboard.writeText(window.location.href);
+  const copyLink    = () => navigator.clipboard.writeText(window.location.href);
   const handleLogout = () => { logout(); navigate('/login'); };
 
-  // ── Loading / error ────────────────────────────────────────────────────────
+  // ── Loading / error ───────────────────────────────────────────────────────
+
   if (loading) {
     return (
       <div className="min-h-screen bg-gray-50 flex items-center justify-center">
@@ -112,7 +115,8 @@ export default function RoomPage() {
   if (error) {
     return (
       <div className="min-h-screen bg-gray-50 flex items-center justify-center">
-        <div className="bg-white rounded-2xl shadow-sm p-8 text-center max-w-sm">
+        <div className="bg-white rounded-2xl shadow-sm p-8 text-center
+                        max-w-sm">
           <div className="text-4xl mb-4">🚫</div>
           <p className="text-gray-700 font-medium mb-2">Room Not Found</p>
           <p className="text-gray-400 text-sm mb-6">{error}</p>
@@ -148,23 +152,10 @@ export default function RoomPage() {
             {connected ? '● Live' : '○ Connecting'}
           </span>
         </div>
-
         <div className="flex items-center gap-3">
           <span className="text-sm text-gray-500 hidden md:block">
             <strong>{user?.username}</strong>
           </span>
-
-          {/* Video Call button — only render when STOMP is ready */}
-          {stompReady && (
-            <VideoCall
-              roomId={roomId}
-              currentUser={user?.username}
-              onlineUsers={onlineUsers}
-              stompClient={stompClientRef.current}
-              connected={connected}
-            />
-          )}
-
           <button
             onClick={copyLink}
             className="text-xs bg-gray-100 hover:bg-gray-200 text-gray-600
@@ -181,8 +172,8 @@ export default function RoomPage() {
       </nav>
 
       {/* Tab bar */}
-      <div className="bg-white border-b border-gray-100 px-6
-                      flex gap-1 shrink-0">
+      <div className="bg-white border-b border-gray-100 px-6 flex gap-1
+                      shrink-0">
         <button
           onClick={() => setActiveTab('chat')}
           className={`px-4 py-2.5 text-sm font-medium border-b-2 transition
@@ -204,6 +195,7 @@ export default function RoomPage() {
       {/* Main content */}
       <div className="flex flex-1 overflow-hidden gap-4 p-4">
 
+        {/* Tab panels */}
         <div className="flex-1 bg-white rounded-2xl border border-gray-100
                         shadow-sm flex flex-col overflow-hidden">
 
@@ -231,14 +223,25 @@ export default function RoomPage() {
           </div>
         </div>
 
-        {/* Online users sidebar */}
+        {/* Right sidebar — online users + video call */}
         <div className="w-56 bg-white rounded-2xl border border-gray-100
-                        shadow-sm p-4 shrink-0 hidden md:flex flex-col">
+                        shadow-sm p-4 shrink-0 hidden md:flex flex-col
+                        overflow-y-auto">
           <OnlineUsers
             users={onlineUsers}
             currentUser={user?.username}
           />
+
+          {/* Video call section — lives below online users */}
+          <VideoCall
+            roomId={roomId}
+            currentUser={user?.username}
+            onlineUsers={onlineUsers}
+            stompClient={stompClientRef.current}
+            connected={connected}
+          />
         </div>
+
       </div>
     </div>
   );
