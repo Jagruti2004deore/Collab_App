@@ -48,4 +48,13 @@ public class RoomController {
     public ResponseEntity<Map<String, Boolean>> roomExists(@PathVariable String roomId) {
         return ResponseEntity.ok(Map.of("exists", roomService.roomExists(roomId)));
     }
+
+    // Add this inside RoomController.java
+// GET /api/rooms/joined — rooms the user has chatted in
+@GetMapping("/joined")
+public ResponseEntity<List<RoomResponse>> getJoinedRooms(
+        @AuthenticationPrincipal UserDetails userDetails) {
+    return ResponseEntity.ok(
+        roomService.getJoinedRooms(userDetails.getUsername()));
+}
 }

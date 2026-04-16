@@ -67,4 +67,17 @@ public class RoomService {
                 .createdAt(room.getCreatedAt())
                 .build();
     }
+
+    // Add this method to RoomService.java
+public List<RoomResponse> getJoinedRooms(String username) {
+    User user = userRepository.findByUsername(username)
+            .orElseThrow(() -> new UsernameNotFoundException("User not found"));
+
+    // Get rooms where user sent at least one message
+    return chatMessageRepository.findDistinctRoomsByUsername(username)
+            .stream()
+            .filter(room -> !room.getCreatedBy().equals(user))
+            .map(this::toResponse)
+            .collect(Collectors.toList());
+}
 }
