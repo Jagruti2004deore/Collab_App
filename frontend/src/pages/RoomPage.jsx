@@ -52,36 +52,37 @@ export default function RoomPage() {
     reconnectDelay: 5000,
 
     onConnect: () => {
-      setConnected(true);
+  setConnected(true);
 
-      // Add yourself to online users immediately
-      setOnlineUsers([user?.username]);
+  // Add yourself immediately
+  setOnlineUsers((prev) =>
+    prev.includes(user?.username) ? prev : [...prev, user?.username]
+  );
 
-      // Subscribe to presence events
-      client.subscribe(
-        `/topic/room/${roomId}/presence`,
-        (frame) => {
-          const p = JSON.parse(frame.body);
-          if (p.eventType === 'JOIN') {
-            setOnlineUsers((prev) =>
-              prev.includes(p.username) ? prev : [...prev, p.username]
-            );
-          }
-          if (p.eventType === 'LEAVE') {
-            setOnlineUsers((prev) =>
-              prev.filter((u) => u !== p.username)
-            );
-          }
-        }
-      );
+  // Subscribe to presence
+  client.subscribe(
+    `/topic/room/${roomId}/presence`,
+    (frame) => {
+      const p = JSON.parse(frame.body);
+      if (p.eventType === 'JOIN') {
+        setOnlineUsers((prev) =>
+          prev.includes(p.username) ? prev : [...prev, p.username]
+        );
+      }
+      if (p.eventType === 'LEAVE') {
+        setOnlineUsers((prev) =>
+          prev.filter((u) => u !== p.username)
+        );
+      }
+    }
+  );
 
-      // Announce join
-      client.publish({
-        destination: `/app/room/${roomId}/join`,
-        body: JSON.stringify({}),
-      });
-    },
-
+  // Announce your own join to others
+  client.publish({
+    destination: `/app/room/${roomId}/join`,
+    body: JSON.stringify({}),
+  });
+},
     onDisconnect: () => {
       setConnected(false);
       setOnlineUsers([]);
@@ -240,25 +241,27 @@ export default function RoomPage() {
           </div>
         </div>
 
-        {/* Right sidebar — online users + video call */}
-        <div className="w-56 bg-white rounded-2xl border border-gray-100
-                        shadow-sm p-4 shrink-0 hidden md:flex flex-col
-                        overflow-y-auto">
-          <OnlineUsers
-            users={onlineUsers}
-            currentUser={user?.username}
-          />
+        {/* Right sidebar */}
+<div className="w-56 bg-white rounded-2xl border border-gray-100
+                shadow-sm p-4 shrink-0 hidden md:flex flex-col
+                overflow-y-auto">
 
-          {/* Video call section — lives below online users */}
-          <VideoCall
-            roomId={roomId}
-            currentUser={user?.username}
-            onlineUsers={onlineUsers}
-            stompClient={stompClientRef.current}
-            connected={connected}
-          />
-        </div>
+  {/* Online users */}
+  <OnlineUsers
+    users={onlineUsers}
+    currentUser={user?.username}
+  />
 
+  {/* Video call — shows when others are online */}
+  <VideoCall
+    roomId={roomId}
+    currentUser={user?.username}
+    onlineUsers={onlineUsers}
+    stompClient={stompClientRef.current}
+    connected={connected}
+  />
+
+</div>
       </div>
     </div>
   );

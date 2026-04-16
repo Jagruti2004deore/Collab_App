@@ -6,7 +6,7 @@ export default function Chat({
   currentUser,
   stompClient,
   connected,
-  onPresenceUpdate
+  
 }) {
   const [messages, setMessages]       = useState([]);
   const [input, setInput]             = useState('');
@@ -32,45 +32,48 @@ export default function Chat({
 
   // Subscribe once connected
   useEffect(() => {
-    if (!stompClient || !connected) return;
+  if (!stompClient || !connected) return;
 
-    // Unsubscribe previous subs
-    subsRef.current.forEach((s) => s.unsubscribe());
-    subsRef.current = [];
+  subsRef.current.forEach((s) => {
+    try { s.unsubscribe(); } catch (e) { console.warn(e); }
+  });
+  subsRef.current = [];
 
-    // Chat messages
-    const s1 = stompClient.subscribe(
-      `/topic/room/${roomId}`,
-      (frame) => {
-        const msg = JSON.parse(frame.body);
-        setMessages((prev) => [...prev, msg]);
+  // Only subscribe to chat messages here
+  const s1 = stompClient.subscribe(
+    `/topic/room/${roomId}`,
+    (frame) => {
+      const msg = JSON.parse(frame.body);
+      setMessages((prev) => [...prev, msg]);
+    }
+  );
+
+  // Typing indicator only
+  const s2 = stompClient.subscribe(
+    `/topic/room/${roomId}/presence`,
+    (frame) => {
+      const p = JSON.parse(frame.body);
+      if (p.eventType === 'TYPING') {
+        setTypingUsers((prev) =>
+          prev.includes(p.username) ? prev : [...prev, p.username]
+        );
       }
-    );
-
-    // Presence (typing)
-    const s2 = stompClient.subscribe(
-      `/topic/room/${roomId}/presence`,
-      (frame) => {
-        const p = JSON.parse(frame.body);
-        if (p.eventType === 'TYPING') {
-          setTypingUsers((prev) =>
-            prev.includes(p.username) ? prev : [...prev, p.username]
-          );
-        }
-        if (p.eventType === 'STOP_TYPING') {
-          setTypingUsers((prev) => prev.filter((u) => u !== p.username));
-        }
-        if (p.eventType === 'JOIN' || p.eventType === 'LEAVE') {
-          onPresenceUpdate?.(p);
-        }
+      if (p.eventType === 'STOP_TYPING') {
+        setTypingUsers((prev) => prev.filter((u) => u !== p.username));
       }
-    );
+      // JOIN/LEAVE handled by RoomPage only
+    }
+  );
 
-    subsRef.current = [s1, s2];
+  subsRef.current = [s1, s2];
 
-    return () => subsRef.current.forEach((s) => s.unsubscribe());
-   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [stompClient, connected, roomId]);
+  return () => {
+    subsRef.current.forEach((s) => {
+      try { s.unsubscribe(); } catch (e) { console.warn(e); }
+    });
+  };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+}, [stompClient, connected, roomId]);
   
   const handleInputChange = (e) => {
     setInput(e.target.value);
