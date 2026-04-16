@@ -42,50 +42,67 @@ export default function RoomPage() {
   // ── Single shared WebSocket connection ────────────────────────────────────
 
   useEffect(() => {
-    const token = localStorage.getItem('token');
+  const token = localStorage.getItem('token');
 
-    const client = new Client({
-      webSocketFactory: () => new SockJS((import.meta.env.VITE_WS_URL || 'http://localhost:8080') + '/ws'),
-      connectHeaders: { Authorization: `Bearer ${token}` },
-      reconnectDelay: 5000,
+  const client = new Client({
+    webSocketFactory: () => new SockJS(
+      `${import.meta.env.VITE_WS_URL || 'http://localhost:8080'}/ws`
+    ),
+    connectHeaders: { Authorization: `Bearer ${token}` },
+    reconnectDelay: 5000,
 
-      onConnect: () => {
-        setConnected(true);
+    onConnect: () => {
+      setConnected(true);
 
-        // Announce join
-        client.publish({
-          destination: `/app/room/${roomId}/join`,
-          body: JSON.stringify({}),
-        });
+      // Add yourself to online users immediately
+      setOnlineUsers([user?.username]);
 
-        // Subscribe to presence
-        client.subscribe(
-          `/topic/room/${roomId}/presence`,
-          (frame) => {
-            const p = JSON.parse(frame.body);
-            handlePresenceUpdate(p);
+      // Subscribe to presence events
+      client.subscribe(
+        `/topic/room/${roomId}/presence`,
+        (frame) => {
+          const p = JSON.parse(frame.body);
+          if (p.eventType === 'JOIN') {
+            setOnlineUsers((prev) =>
+              prev.includes(p.username) ? prev : [...prev, p.username]
+            );
           }
-        );
-      },
+          if (p.eventType === 'LEAVE') {
+            setOnlineUsers((prev) =>
+              prev.filter((u) => u !== p.username)
+            );
+          }
+        }
+      );
 
-      onDisconnect: () => setConnected(false),
-      onStompError:  () => setConnected(false),
-    });
+      // Announce join
+      client.publish({
+        destination: `/app/room/${roomId}/join`,
+        body: JSON.stringify({}),
+      });
+    },
 
-    client.activate();
-    stompClientRef.current = client;
+    onDisconnect: () => {
+      setConnected(false);
+      setOnlineUsers([]);
+    },
+    onStompError: () => setConnected(false),
+  });
 
-    return () => {
-      if (client.connected) {
-        client.publish({
-          destination: `/app/room/${roomId}/leave`,
-          body: JSON.stringify({}),
-        });
-      }
-      client.deactivate();
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [roomId]);
+  client.activate();
+  stompClientRef.current = client;
+
+  return () => {
+    if (client.connected) {
+      client.publish({
+        destination: `/app/room/${roomId}/leave`,
+        body: JSON.stringify({}),
+      });
+    }
+    client.deactivate();
+  };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+}, [roomId]);
 
   const handlePresenceUpdate = useCallback((presence) => {
     const { eventType, username } = presence;
@@ -99,7 +116,7 @@ export default function RoomPage() {
     }
   }, []);
 
-  const copyLink    = () => navigator.clipboard.writeText(window.location.href);
+  const copyLink = () => navigator.clipboard.writeText(roomId);
   const handleLogout = () => { logout(); navigate('/login'); };
 
   // ── Loading / error ───────────────────────────────────────────────────────
