@@ -11,9 +11,8 @@ import com.collabapp.entity.Room;
 
 public interface ChatMessageRepository extends JpaRepository<ChatMessage, Long> {
 
-    // Load last 50 messages for a room, oldest first
     List<ChatMessage> findTop50ByRoomOrderBySentAtAsc(Room room);
 
     @Query("SELECT DISTINCT m.room FROM ChatMessage m WHERE m.sender = :username")
-List<Room> findDistinctRoomsByUsername(@Param("username") String username);
+    List<Room> findDistinctRoomsByUsername(@Param("username") String username);
 }

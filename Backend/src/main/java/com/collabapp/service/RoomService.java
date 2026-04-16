@@ -3,6 +3,7 @@ package com.collabapp.service;
 import com.collabapp.dto.*;
 import com.collabapp.entity.Room;
 import com.collabapp.entity.User;
+import com.collabapp.repository.ChatMessageRepository;
 import com.collabapp.repository.RoomRepository;
 import com.collabapp.repository.UserRepository;
 import lombok.RequiredArgsConstructor;
@@ -19,14 +20,14 @@ public class RoomService {
 
     private final RoomRepository roomRepository;
     private final UserRepository userRepository;
+    private final ChatMessageRepository chatMessageRepository;
 
-    // Create a new room — generate a UUID as the public room ID
     public RoomResponse createRoom(CreateRoomRequest request, String username) {
         User user = userRepository.findByUsername(username)
                 .orElseThrow(() -> new UsernameNotFoundException("User not found"));
 
         Room room = Room.builder()
-                .roomId(UUID.randomUUID().toString())  // e.g. "a1b2c3d4-..."
+                .roomId(UUID.randomUUID().toString())
                 .roomName(request.getRoomName())
                 .createdBy(user)
                 .build();
@@ -35,14 +36,12 @@ public class RoomService {
         return toResponse(room);
     }
 
-    // Get a single room by its public roomId — used when someone joins via link
     public RoomResponse getRoom(String roomId) {
         Room room = roomRepository.findByRoomId(roomId)
                 .orElseThrow(() -> new RuntimeException("Room not found"));
         return toResponse(room);
     }
 
-    // Get all rooms created by this user — shown on the dashboard
     public List<RoomResponse> getMyRooms(String username) {
         User user = userRepository.findByUsername(username)
                 .orElseThrow(() -> new UsernameNotFoundException("User not found"));
@@ -53,12 +52,21 @@ public class RoomService {
                 .collect(Collectors.toList());
     }
 
-    // Check if a room exists — used when validating a join link
+    public List<RoomResponse> getJoinedRooms(String username) {
+        User user = userRepository.findByUsername(username)
+                .orElseThrow(() -> new UsernameNotFoundException("User not found"));
+
+        return chatMessageRepository.findDistinctRoomsByUsername(username)
+                .stream()
+                .filter(room -> !room.getCreatedBy().getUsername().equals(username))
+                .map(this::toResponse)
+                .collect(Collectors.toList());
+    }
+
     public boolean roomExists(String roomId) {
         return roomRepository.existsByRoomId(roomId);
     }
 
-    // Helper: convert Room entity → RoomResponse DTO
     private RoomResponse toResponse(Room room) {
         return RoomResponse.builder()
                 .roomId(room.getRoomId())
@@ -67,17 +75,4 @@ public class RoomService {
                 .createdAt(room.getCreatedAt())
                 .build();
     }
-
-    // Add this method to RoomService.java
-public List<RoomResponse> getJoinedRooms(String username) {
-    User user = userRepository.findByUsername(username)
-            .orElseThrow(() -> new UsernameNotFoundException("User not found"));
-
-    // Get rooms where user sent at least one message
-    return chatMessageRepository.findDistinctRoomsByUsername(username)
-            .stream()
-            .filter(room -> !room.getCreatedBy().equals(user))
-            .map(this::toResponse)
-            .collect(Collectors.toList());
-}
 }
