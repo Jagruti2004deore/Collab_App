@@ -329,23 +329,23 @@ export default function Whiteboard({ roomId, currentUser, stompClient, connected
         {tooltip && (
           <div
             style={{
-              position: 'absolute',
-              left: tooltip.x + 12,
-              top: tooltip.y,
-              pointerEvents: 'none',
-            }}
+  position: 'absolute',
+  left: `${tooltip.x + 12}px`,
+  top: `${tooltip.y}px`,
+  pointerEvents: 'none',
+}}
             className="flex items-center gap-1.5 bg-gray-800 text-white
                        text-xs px-2.5 py-1.5 rounded-lg shadow-lg
                        whitespace-nowrap z-10">
             <span
               style={{
-                width: 8,
-                height: 8,
-                borderRadius: '50%',
-                background: getUserColor(tooltip.username),
-                display: 'inline-block',
-                flexShrink: 0,
-              }}
+             width: '8px',
+             height: '8px',
+             borderRadius: '50%',
+             background: getUserColor(tooltip.username),
+             display: 'inline-block',
+             flexShrink: 0,
+             }}
             />
             {tooltip.username === currentUser ? 'You' : tooltip.username}
           </div>

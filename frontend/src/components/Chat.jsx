@@ -72,7 +72,6 @@ export default function Chat({
       try { s.unsubscribe(); } catch (e) { console.warn(e); }
     });
   };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
 }, [stompClient, connected, roomId]);
   
   const handleInputChange = (e) => {

@@ -1,16 +1,29 @@
-import { createContext, useContext, useState, useEffect } from 'react';
+import { createContext, useState, useEffect, useRef } from 'react';
 import api from '../api/axios';
 
-const AuthContext = createContext(null);
+export const AuthContext = createContext(null);
 
 export function AuthProvider({ children }) {
   const [user, setUser]       = useState(null);
   const [loading, setLoading] = useState(true);
+  const initialized           = useRef(false);
 
   useEffect(() => {
-    const stored = localStorage.getItem('user');
-    if (stored) setUser(JSON.parse(stored));
-    setLoading(false);
+    if (initialized.current) return;
+    initialized.current = true;
+
+    let parsed = null;
+    try {
+      const stored = localStorage.getItem('user');
+      if (stored) parsed = JSON.parse(stored);
+    } catch (e) {
+      console.warn('Failed to parse stored user', e);
+    }
+
+    setTimeout(() => {
+      setUser(parsed);
+      setLoading(false);
+    }, 0);
   }, []);
 
   const login = async (username, password) => {
@@ -40,8 +53,4 @@ export function AuthProvider({ children }) {
       {children}
     </AuthContext.Provider>
   );
-}
-
-export function useAuth() {
-  return useContext(AuthContext);
 }
