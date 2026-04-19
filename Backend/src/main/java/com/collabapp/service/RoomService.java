@@ -1,18 +1,21 @@
 package com.collabapp.service;
 
-import com.collabapp.dto.*;
+import java.util.List;
+import java.util.UUID;
+import java.util.stream.Collectors;
+
+import org.springframework.security.core.userdetails.UsernameNotFoundException;
+import org.springframework.stereotype.Service;
+
+import com.collabapp.dto.CreateRoomRequest;
+import com.collabapp.dto.RoomResponse;
 import com.collabapp.entity.Room;
 import com.collabapp.entity.User;
 import com.collabapp.repository.ChatMessageRepository;
 import com.collabapp.repository.RoomRepository;
 import com.collabapp.repository.UserRepository;
-import lombok.RequiredArgsConstructor;
-import org.springframework.security.core.userdetails.UsernameNotFoundException;
-import org.springframework.stereotype.Service;
 
-import java.util.List;
-import java.util.UUID;
-import java.util.stream.Collectors;
+import lombok.RequiredArgsConstructor;
 
 @Service
 @RequiredArgsConstructor
@@ -53,15 +56,16 @@ public class RoomService {
     }
 
     public List<RoomResponse> getJoinedRooms(String username) {
-        User user = userRepository.findByUsername(username)
-                .orElseThrow(() -> new UsernameNotFoundException("User not found"));
+    // Verify user exists first
+    userRepository.findByUsername(username)
+            .orElseThrow(() -> new UsernameNotFoundException("User not found"));
 
-        return chatMessageRepository.findDistinctRoomsByUsername(username)
-                .stream()
-                .filter(room -> !room.getCreatedBy().getUsername().equals(username))
-                .map(this::toResponse)
-                .collect(Collectors.toList());
-    }
+    return chatMessageRepository.findDistinctRoomsByUsername(username)
+            .stream()
+            .filter(room -> !room.getCreatedBy().getUsername().equals(username))
+            .map(this::toResponse)
+            .collect(Collectors.toList());
+}
 
     public boolean roomExists(String roomId) {
         return roomRepository.existsByRoomId(roomId);
