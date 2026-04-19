@@ -20,13 +20,13 @@ export default function RoomPage() {
   const [onlineUsers, setOnlineUsers] = useState([]);
   const [activeTab, setActiveTab]     = useState('chat');
   const [connected, setConnected]     = useState(false);
+  const [copied, setCopied]           = useState(false);
 
-  const stompClientRef  = useRef(null);
-  const currentUserRef  = useRef(null);
+  const stompClientRef = useRef(null);
+  const usernameRef    = useRef(null);
 
-  // Keep currentUserRef in sync so callbacks always see latest value
   useEffect(() => {
-    currentUserRef.current = user?.username;
+    usernameRef.current = user?.username;
   }, [user]);
 
   // Fetch room info
@@ -44,10 +44,22 @@ export default function RoomPage() {
     fetchRoom();
   }, [roomId]);
 
-  // WebSocket connection
+  // Fetch who is already online
+  const fetchOnlineUsers = async () => {
+    try {
+      const res = await api.get(`/api/rooms/${roomId}/online`);
+      const users = Array.isArray(res.data)
+        ? res.data
+        : Array.from(res.data);
+      setOnlineUsers(users);
+    } catch (e) {
+      console.warn('Could not fetch online users', e);
+    }
+  };
+
+  // WebSocket
   useEffect(() => {
     if (!user?.username) return;
-
     const token    = localStorage.getItem('token');
     const username = user.username;
 
@@ -60,26 +72,21 @@ export default function RoomPage() {
       reconnectDelay: 5000,
 
       onConnect: () => {
-        console.log('WebSocket connected as:', username);
+        console.log('[WS] Connected as:', username);
         setConnected(true);
 
-        // Add yourself immediately
-        setOnlineUsers([username]);
-
-        // Subscribe to presence BEFORE announcing join
+        // Step 1: subscribe to presence FIRST
         client.subscribe(
           `/topic/room/${roomId}/presence`,
           (frame) => {
             const p = JSON.parse(frame.body);
-            console.log('Presence event:', p);
+            console.log('[Presence]', p);
 
             if (p.eventType === 'JOIN') {
-              setOnlineUsers((prev) => {
-                if (prev.includes(p.username)) return prev;
-                return [...prev, p.username];
-              });
+              setOnlineUsers((prev) =>
+                prev.includes(p.username) ? prev : [...prev, p.username]
+              );
             }
-
             if (p.eventType === 'LEAVE') {
               setOnlineUsers((prev) =>
                 prev.filter((u) => u !== p.username)
@@ -88,23 +95,25 @@ export default function RoomPage() {
           }
         );
 
-        // Small delay then announce join — ensures subscription is active
-        setTimeout(() => {
-          client.publish({
-            destination: `/app/room/${roomId}/join`,
-            body: JSON.stringify({ username }),
-          });
-        }, 300);
+        // Step 2: fetch who is already online
+        fetchOnlineUsers().then(() => {
+          // Step 3: announce our own join AFTER fetching
+          setTimeout(() => {
+            client.publish({
+              destination: `/app/room/${roomId}/join`,
+              body: JSON.stringify({ username }),
+            });
+          }, 500);
+        });
       },
 
       onDisconnect: () => {
-        console.log('WebSocket disconnected');
+        console.log('[WS] Disconnected');
         setConnected(false);
-        setOnlineUsers([]);
       },
 
       onStompError: (frame) => {
-        console.error('STOMP error:', frame);
+        console.error('[WS] STOMP error', frame);
         setConnected(false);
       },
     });
@@ -112,7 +121,6 @@ export default function RoomPage() {
     client.activate();
     stompClientRef.current = client;
 
-    // Cleanup
     return () => {
       if (client.connected) {
         client.publish({
@@ -121,15 +129,20 @@ export default function RoomPage() {
         });
       }
       client.deactivate();
+      setOnlineUsers([]);
     };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [roomId, user?.username]);
 
-  const copyLink = () => {
+  const copyRoomId = () => {
     navigator.clipboard.writeText(roomId);
-    alert('Room ID copied! Share this with others to join.');
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
   };
 
   const handleLogout = () => { logout(); navigate('/login'); };
+
+  const otherUsers = onlineUsers.filter((u) => u !== user?.username);
 
   if (loading) {
     return (
@@ -143,7 +156,7 @@ export default function RoomPage() {
     return (
       <div className="min-h-screen bg-gray-50 flex items-center justify-center">
         <div className="bg-white rounded-2xl shadow-sm p-8 text-center max-w-sm">
-          <div className="text-4xl mb-4">🚫</div>
+          <p className="text-4xl mb-4">🚫</p>
           <p className="text-gray-700 font-medium mb-2">Room Not Found</p>
           <p className="text-gray-400 text-sm mb-6">{error}</p>
           <button onClick={() => navigate('/dashboard')}
@@ -180,10 +193,10 @@ export default function RoomPage() {
           <span className="text-sm text-gray-500 hidden md:block">
             <strong>{user?.username}</strong>
           </span>
-          <button onClick={copyLink}
+          <button onClick={copyRoomId}
             className="text-xs bg-gray-100 hover:bg-gray-200 text-gray-600
                        px-3 py-1.5 rounded-lg transition">
-            Copy Room ID
+            {copied ? '✓ Copied!' : 'Copy Room ID'}
           </button>
           <button onClick={handleLogout}
             className="text-xs bg-gray-100 hover:bg-gray-200 text-gray-700
@@ -193,7 +206,7 @@ export default function RoomPage() {
         </div>
       </nav>
 
-      {/* Tab bar */}
+      {/* Tabs */}
       <div className="bg-white border-b border-gray-100 px-6 flex gap-1
                       shrink-0">
         <button onClick={() => setActiveTab('chat')}
@@ -212,10 +225,10 @@ export default function RoomPage() {
         </button>
       </div>
 
-      {/* Main content */}
+      {/* Main */}
       <div className="flex flex-1 overflow-hidden gap-4 p-4">
 
-        {/* Tab panels */}
+        {/* Panel */}
         <div className="flex-1 bg-white rounded-2xl border border-gray-100
                         shadow-sm flex flex-col overflow-hidden">
           <div className={`flex-1 overflow-hidden flex flex-col
@@ -238,10 +251,10 @@ export default function RoomPage() {
           </div>
         </div>
 
-        {/* Right sidebar */}
+        {/* Sidebar */}
         <div className="w-56 bg-white rounded-2xl border border-gray-100
                         shadow-sm p-4 shrink-0 hidden md:flex flex-col
-                        overflow-y-auto">
+                        overflow-y-auto gap-4">
 
           {/* Online users */}
           <OnlineUsers
@@ -249,30 +262,26 @@ export default function RoomPage() {
             currentUser={user?.username}
           />
 
-          {/* Video call — always render, shows button when others online */}
-          <div className="mt-4 pt-4 border-t border-gray-100">
+          {/* Video call section */}
+          <div className="border-t border-gray-100 pt-4">
             <p className="text-xs font-medium text-gray-500 mb-2">
               Video call
             </p>
-            {onlineUsers.filter(u => u !== user?.username).length === 0 ? (
-              <p className="text-xs text-gray-300">
+            {otherUsers.length === 0 ? (
+              <p className="text-xs text-gray-300 italic">
                 No other users online
               </p>
             ) : (
-              onlineUsers
-                .filter(u => u !== user?.username)
-                .map(u => (
-                  <div key={u} className="mb-1">
-                    <VideoCall
-                      roomId={roomId}
-                      currentUser={user?.username}
-                      onlineUsers={onlineUsers}
-                      stompClient={stompClientRef.current}
-                      connected={connected}
-                      targetUser={u}
-                    />
-                  </div>
-                ))
+              otherUsers.map((u) => (
+                <VideoCall
+                  key={u}
+                  roomId={roomId}
+                  currentUser={user?.username}
+                  stompClient={stompClientRef.current}
+                  connected={connected}
+                  targetUser={u}
+                />
+              ))
             )}
           </div>
 
