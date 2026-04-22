@@ -100,9 +100,9 @@ export default function RoomPage() {
           // Step 3: announce our own join AFTER fetching
           setTimeout(() => {
             client.publish({
-              destination: `/app/room/${roomId}/join`,
-              body: JSON.stringify({ username }),
-            });
+  destination: `/app/room/${roomId}/join`,
+  body: JSON.stringify({ username }),
+});
           }, 500);
         });
       },
@@ -124,9 +124,9 @@ export default function RoomPage() {
     return () => {
       if (client.connected) {
         client.publish({
-          destination: `/app/room/${roomId}/leave`,
-          body: JSON.stringify({ username }),
-        });
+  destination: `/app/room/${roomId}/leave`,
+  body: JSON.stringify({ username }),
+});
       }
       client.deactivate();
       setOnlineUsers([]);
