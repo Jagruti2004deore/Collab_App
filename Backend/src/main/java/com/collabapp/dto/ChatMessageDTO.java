@@ -1,7 +1,6 @@
 package com.collabapp.dto;
 
 import lombok.*;
-
 import java.time.LocalDateTime;
 
 @Data
@@ -15,12 +14,17 @@ public class ChatMessageDTO {
     private String content;
     private LocalDateTime sentAt;
 
-    // Message type — helps the frontend know what kind of event this is
+    // Added FILE type and file fields
     public enum MessageType {
-        CHAT,       // regular chat message
-        JOIN,       // user joined notification
-        LEAVE       // user left notification
+        CHAT,
+        JOIN,
+        LEAVE,
+        FILE
     }
 
     private MessageType type;
+
+    // File fields — null for regular chat messages
+    private String fileName;
+    private String fileType;
 }

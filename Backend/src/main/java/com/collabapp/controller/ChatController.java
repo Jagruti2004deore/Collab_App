@@ -30,16 +30,26 @@ public class ChatController {
     private final SimpMessagingTemplate messagingTemplate;
 
     @MessageMapping("/chat/{roomId}")
-    public void sendMessage(@DestinationVariable String roomId,
-                            @Payload ChatMessageDTO messageDTO,
-                            Principal principal) {
-        String sender = (principal != null)
-                ? principal.getName()
-                : messageDTO.getSender();
-        ChatMessageDTO saved = chatService.saveMessage(
-                roomId, sender, messageDTO.getContent());
-        messagingTemplate.convertAndSend("/topic/room/" + roomId, saved);
-    }
+public void sendMessage(@DestinationVariable String roomId,
+                        @Payload ChatMessageDTO messageDTO,
+                        Principal principal) {
+
+    String sender = (principal != null)
+            ? principal.getName()
+            : messageDTO.getSender();
+
+    // Pass file fields through
+    ChatMessageDTO saved = chatService.saveMessage(
+            roomId,
+            sender,
+            messageDTO.getContent(),
+            messageDTO.getType() != null ? messageDTO.getType().name() : "CHAT",
+            messageDTO.getFileName(),
+            messageDTO.getFileType()
+    );
+
+    messagingTemplate.convertAndSend("/topic/room/" + roomId, saved);
+}
 
     @MessageMapping("/room/{roomId}/join")
     public void userJoin(@DestinationVariable String roomId,
