@@ -12,7 +12,6 @@ export default function VideoCall({
   roomId,
   currentUser,
   stompClient,
-  connected,
   targetUser,
 }) {
   const [callState, setCallState]           = useState('idle');
@@ -153,21 +152,14 @@ export default function VideoCall({
     }
   }, [currentUser, cleanupCall]);
 
-  useEffect(() => {
-    if (!stompClient || !connected) return;
-
-    const sub = stompClient.subscribe(
-      '/user/queue/signal',
-      (frame) => {
-        const signal = JSON.parse(frame.body);
-        handleIncomingSignal(signal);
-      }
-    );
-
-    return () => {
-      try { sub.unsubscribe(); } catch (e) { console.warn(e); }
-    };
-  }, [stompClient, connected, handleIncomingSignal]);
+  // Replace the subscription useEffect with this:
+useEffect(() => {
+  const handler = (e) => {
+    handleIncomingSignal(e.detail);
+  };
+  window.addEventListener('webrtc-signal', handler);
+  return () => window.removeEventListener('webrtc-signal', handler);
+}, [handleIncomingSignal]);
 
   const getLocalStream = async () => {
     const stream = await navigator.mediaDevices.getUserMedia({

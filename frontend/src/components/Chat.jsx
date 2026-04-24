@@ -114,29 +114,38 @@ export default function Chat({ roomId, currentUser, stompClient, connected }) {
   };
 
   const sendFile = (e) => {
-    e.preventDefault();
-    if (!selectedFile || !connected) return;
+  e.preventDefault();
+  if (!selectedFile || !connected) return;
 
-    const reader = new FileReader();
-    reader.onload = () => {
-      stompClient.publish({
-        destination: '/app/chat/' + roomId,
-        body: JSON.stringify({
-          roomId: roomId,
-          sender: currentUser,
-          content: reader.result,
-          type: 'FILE',
-          fileName: selectedFile.name,
-          fileType: selectedFile.type,
-        }),
-      });
-      setSelectedFile(null);
-      if (fileInputRef.current) {
-        fileInputRef.current.value = '';
-      }
-    };
-    reader.readAsDataURL(selectedFile);
+  // Check file size — base64 of 5MB = ~6.7MB, keep under 5MB
+  if (selectedFile.size > 5 * 1024 * 1024) {
+    alert('File too large. Please select a file under 5MB.');
+    return;
+  }
+
+  const reader = new FileReader();
+  reader.onload = () => {
+    stompClient.publish({
+      destination: '/app/chat/' + roomId,
+      body: JSON.stringify({
+        roomId: roomId,
+        sender: currentUser,
+        content: reader.result,
+        type: 'FILE',
+        fileName: selectedFile.name,
+        fileType: selectedFile.type,
+      }),
+    });
+    setSelectedFile(null);
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+    }
   };
+  reader.onerror = () => {
+    alert('Failed to read file. Please try again.');
+  };
+  reader.readAsDataURL(selectedFile);
+};
 
   const formatTime = (sentAt) => {
     if (!sentAt) return '';

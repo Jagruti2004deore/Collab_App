@@ -95,6 +95,20 @@ export default function RoomPage() {
           }
         );
 
+        // Subscribe to signals ONCE at room level
+     client.subscribe(
+         '/user/queue/signal',
+         (frame) => {
+          const signal = JSON.parse(frame.body);
+          // Store signal for VideoCall components to handle
+         window.__pendingSignal = signal;
+        window.dispatchEvent(new CustomEvent('webrtc-signal', {
+         detail: signal
+        }));
+       }
+      );
+
+
         // Step 2: fetch who is already online
         fetchOnlineUsers().then(() => {
           // Step 3: announce our own join AFTER fetching
