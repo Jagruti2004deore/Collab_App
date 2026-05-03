@@ -22,13 +22,15 @@ export default function RoomPage() {
   const [connected, setConnected]     = useState(false);
   const [copied, setCopied]           = useState(false);
 
-  // stompClient in state so children re-render when it changes
-  const [stompClient, setStompClient] = useState(null);
+  const stompClientRef   = useRef(null);
+  const isConnectedRef   = useRef(false);
+  const roomIdRef        = useRef(roomId);
+  const usernameRef      = useRef(null);
 
-  const clientIdRef  = useRef(0);
-  const activeIdRef  = useRef(0);
+  useEffect(() => { roomIdRef.current = roomId; }, [roomId]);
+  useEffect(() => { usernameRef.current = user?.username; }, [user]);
 
-  // Fetch room info once
+  // Fetch room info — runs once
   useEffect(() => {
     api.get('/api/rooms/' + roomId)
       .then((res) => setRoom(res.data))
@@ -36,16 +38,15 @@ export default function RoomPage() {
       .finally(() => setLoading(false));
   }, [roomId]);
 
-  // WebSocket connection
+  // WebSocket — only re-runs if roomId or username changes
   useEffect(() => {
     if (!user?.username) return;
 
+    // Prevent double connections
+    if (isConnectedRef.current) return;
+
     const token    = localStorage.getItem('token');
     const username = user.username;
-
-    clientIdRef.current += 1;
-    const myId = clientIdRef.current;
-    activeIdRef.current = myId;
 
     const client = new Client({
       webSocketFactory: () =>
@@ -53,22 +54,17 @@ export default function RoomPage() {
           (import.meta.env.VITE_WS_URL || 'http://localhost:8080') + '/ws'
         ),
       connectHeaders: { Authorization: 'Bearer ' + token },
-      reconnectDelay: 0,
+      reconnectDelay: 10000,
 
       onConnect: () => {
-        if (activeIdRef.current !== myId) {
-          client.deactivate();
-          return;
-        }
-
-        console.log('[WS] Connected as:', username);
+        if (isConnectedRef.current) return;
+        isConnectedRef.current = true;
         setConnected(true);
-        setStompClient(client);
 
+        // Presence subscription
         client.subscribe(
           '/topic/room/' + roomId + '/presence',
           (frame) => {
-            if (activeIdRef.current !== myId) return;
             const p = JSON.parse(frame.body);
             if (p.eventType === 'JOIN') {
               setOnlineUsers((prev) =>
@@ -83,10 +79,10 @@ export default function RoomPage() {
           }
         );
 
+        // Signal subscription — single, dispatches to window
         client.subscribe(
           '/user/queue/signal',
           (frame) => {
-            if (activeIdRef.current !== myId) return;
             const signal = JSON.parse(frame.body);
             window.dispatchEvent(
               new CustomEvent('webrtc-signal', { detail: signal })
@@ -94,9 +90,9 @@ export default function RoomPage() {
           }
         );
 
+        // Fetch current online users once, then announce join
         api.get('/api/rooms/' + roomId + '/online')
           .then((res) => {
-            if (activeIdRef.current !== myId) return;
             const users = Array.isArray(res.data)
               ? res.data
               : Array.from(res.data);
@@ -104,9 +100,8 @@ export default function RoomPage() {
           })
           .catch(() => {})
           .finally(() => {
-            if (activeIdRef.current !== myId) return;
             setTimeout(() => {
-              if (client.connected && activeIdRef.current === myId) {
+              if (client.connected) {
                 client.publish({
                   destination: '/app/room/' + roomId + '/join',
                   body: JSON.stringify({ username }),
@@ -117,42 +112,33 @@ export default function RoomPage() {
       },
 
       onDisconnect: () => {
-        if (activeIdRef.current === myId) {
-          setConnected(false);
-          setStompClient(null);
-        }
+        isConnectedRef.current = false;
+        setConnected(false);
       },
 
-      onStompError: (frame) => {
-        console.error('[WS] STOMP error:', frame);
-        if (activeIdRef.current === myId) {
-          setConnected(false);
-          setStompClient(null);
-        }
+      onStompError: () => {
+        isConnectedRef.current = false;
+        setConnected(false);
       },
     });
 
     client.activate();
+    stompClientRef.current = client;
 
     return () => {
-      if (activeIdRef.current === myId) {
-        activeIdRef.current = -1;
-      }
+      isConnectedRef.current = false;
       if (client.connected) {
-        try {
-          client.publish({
-            destination: '/app/room/' + roomId + '/leave',
-            body: JSON.stringify({ username }),
-          });
-        } catch (e) {
-          console.warn('Leave publish failed:', e);
-        }
+        client.publish({
+          destination: '/app/room/' + roomId + '/leave',
+          body: JSON.stringify({ username }),
+        });
       }
       client.deactivate();
-      setStompClient(null);
       setOnlineUsers([]);
       setConnected(false);
     };
+  // Only re-run if roomId or username actually changes
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [roomId, user?.username]);
 
   const copyRoomId = () => {
@@ -176,8 +162,7 @@ export default function RoomPage() {
   if (error) {
     return (
       <div className="min-h-screen bg-gray-50 flex items-center justify-center">
-        <div className="bg-white rounded-2xl shadow-sm p-8 text-center
-                        max-w-sm w-full mx-4">
+        <div className="bg-white rounded-2xl shadow-sm p-8 text-center max-w-sm">
           <p className="text-gray-700 font-medium mb-2">Room Not Found</p>
           <p className="text-gray-400 text-sm mb-6">{error}</p>
           <button
@@ -192,24 +177,21 @@ export default function RoomPage() {
   }
 
   return (
-    <div className="h-screen flex flex-col bg-gray-50 overflow-hidden">
+    <div className="h-screen flex flex-col bg-gray-50">
 
       {/* Navbar */}
-      <nav className="bg-white shadow-sm px-4 py-3 flex items-center
-                      justify-between shrink-0 min-w-0">
-        <div className="flex items-center gap-2 min-w-0">
+      <nav className="bg-white shadow-sm px-6 py-3 flex items-center
+                      justify-between shrink-0">
+        <div className="flex items-center gap-3">
           <button
             onClick={() => navigate('/dashboard')}
-            className="text-gray-400 hover:text-gray-600 text-sm
-                       transition shrink-0">
+            className="text-gray-400 hover:text-gray-600 text-sm transition">
             Back
           </button>
-          <span className="text-gray-300 shrink-0">|</span>
-          <span className="font-bold text-indigo-600 truncate">
-            {room?.roomName}
-          </span>
+          <span className="text-gray-300">|</span>
+          <span className="font-bold text-indigo-600">{room?.roomName}</span>
           <span className={
-            'text-xs px-2 py-0.5 rounded-full font-medium shrink-0 ' +
+            'text-xs px-2 py-0.5 rounded-full font-medium ' +
             (connected
               ? 'bg-emerald-100 text-emerald-700'
               : 'bg-yellow-100 text-yellow-700')
@@ -217,15 +199,15 @@ export default function RoomPage() {
             {connected ? 'Live' : 'Connecting'}
           </span>
         </div>
-        <div className="flex items-center gap-2 shrink-0">
-          <span className="text-sm text-gray-500 hidden lg:block">
+        <div className="flex items-center gap-3">
+          <span className="text-sm text-gray-500 hidden md:block">
             <strong>{user?.username}</strong>
           </span>
           <button
             onClick={copyRoomId}
             className="text-xs bg-gray-100 hover:bg-gray-200 text-gray-600
-                       px-3 py-1.5 rounded-lg transition whitespace-nowrap">
-            {copied ? 'Copied!' : 'Copy ID'}
+                       px-3 py-1.5 rounded-lg transition">
+            {copied ? 'Copied!' : 'Copy Room ID'}
           </button>
           <button
             onClick={handleLogout}
@@ -237,7 +219,7 @@ export default function RoomPage() {
       </nav>
 
       {/* Tabs */}
-      <div className="bg-white border-b border-gray-100 px-4 flex gap-1
+      <div className="bg-white border-b border-gray-100 px-6 flex gap-1
                       shrink-0">
         <button
           onClick={() => setActiveTab('chat')}
@@ -261,12 +243,12 @@ export default function RoomPage() {
         </button>
       </div>
 
-      {/* Main layout */}
-      <div className="flex flex-1 overflow-hidden p-3 gap-3">
+      {/* Main content */}
+      <div className="flex flex-1 overflow-hidden gap-4 p-4">
 
         {/* Content panel */}
         <div className="flex-1 bg-white rounded-2xl border border-gray-100
-                        shadow-sm flex flex-col overflow-hidden min-w-0">
+                        shadow-sm flex flex-col overflow-hidden">
           <div className={
             'flex-1 overflow-hidden flex flex-col ' +
             (activeTab === 'chat' ? 'flex' : 'hidden')
@@ -274,7 +256,7 @@ export default function RoomPage() {
             <Chat
               roomId={roomId}
               currentUser={user?.username}
-              stompClient={stompClient}
+              stompClient={stompClientRef.current}
               connected={connected}
             />
           </div>
@@ -285,25 +267,23 @@ export default function RoomPage() {
             <Whiteboard
               roomId={roomId}
               currentUser={user?.username}
-              stompClient={stompClient}
+              stompClient={stompClientRef.current}
               connected={connected}
             />
           </div>
         </div>
 
         {/* Sidebar */}
-        <div
-          className="bg-white rounded-2xl border border-gray-100
-                     shadow-sm p-3 shrink-0 hidden md:flex flex-col
-                     overflow-y-auto overflow-x-hidden"
-          style={{ width: '200px', minWidth: '200px', maxWidth: '200px' }}>
+        <div className="w-56 bg-white rounded-2xl border border-gray-100
+                        shadow-sm p-4 shrink-0 hidden md:flex flex-col
+                        overflow-y-auto gap-4">
 
           <OnlineUsers
             users={onlineUsers}
             currentUser={user?.username}
           />
 
-          <div className="border-t border-gray-100 pt-3 mt-2">
+          <div className="border-t border-gray-100 pt-4">
             <p className="text-xs font-medium text-gray-500 mb-2">
               Video call
             </p>
@@ -315,7 +295,7 @@ export default function RoomPage() {
               <VideoCall
                 roomId={roomId}
                 currentUser={user?.username}
-                stompClient={stompClient}
+                stompClient={stompClientRef.current}
                 connected={connected}
                 otherUsers={otherUsers}
               />
@@ -327,3 +307,4 @@ export default function RoomPage() {
     </div>
   );
 }
+
