@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useCallback } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 const ICE_SERVERS = {
   iceServers: [
@@ -22,6 +22,45 @@ const ICE_SERVERS = {
   ],
 };
 
+function VideoTile({ username, stream, muted, local, camOff, isScreenShare, onSelect }) {
+  const videoRef = useRef(null);
+
+  useEffect(() => {
+    if (videoRef.current && stream) {
+      videoRef.current.srcObject = stream;
+    }
+  }, [stream]);
+
+  return (
+    <button
+      type="button"
+      onClick={onSelect}
+      className="group relative aspect-video w-full overflow-hidden rounded-2xl bg-slate-900 text-left outline-none ring-1 ring-white/10 transition hover:ring-blue-400 focus:ring-2 focus:ring-blue-400">
+      {stream && !camOff ? (
+        <video
+          ref={videoRef}
+          autoPlay
+          playsInline
+          muted={muted}
+          className={'h-full w-full ' + (isScreenShare ? 'object-contain bg-black' : 'object-cover')}
+        />
+      ) : (
+        <div className="flex h-full w-full items-center justify-center">
+          <div className="flex h-16 w-16 items-center justify-center rounded-full bg-slate-700 text-2xl font-black text-slate-300">
+            {username?.charAt(0)?.toUpperCase() || '?'}
+          </div>
+        </div>
+      )}
+      <div className="absolute bottom-2 left-2 rounded-full bg-black/60 px-3 py-1 text-xs font-bold text-white">
+        {isScreenShare ? `${local ? 'Your' : username + "'s"} screen` : local ? 'You' : username}
+      </div>
+      <div className="absolute right-2 top-2 hidden rounded-full bg-white/90 px-2 py-1 text-[10px] font-black text-slate-900 group-hover:block">
+        Enlarge
+      </div>
+    </button>
+  );
+}
+
 export default function VideoCall({
   roomId,
   currentUser,
@@ -29,48 +68,28 @@ export default function VideoCall({
   connected,
   otherUsers,
 }) {
-  const [callState, setCallState]           = useState('idle');
-  const [remoteUser, setRemoteUser]         = useState(null);
-  const [isMuted, setIsMuted]               = useState(false);
-  const [isCamOff, setIsCamOff]             = useState(false);
-  const [incomingSignal, setIncomingSignal] = useState(null);
-  const [showWhiteboard, setShowWhiteboard] = useState(false);
+  const [inCall, setInCall] = useState(false);
+  const [localStream, setLocalStream] = useState(null);
+  const [remoteStreams, setRemoteStreams] = useState({});
+  const [incomingFrom, setIncomingFrom] = useState(null);
+  const [isMuted, setIsMuted] = useState(false);
+  const [isCamOff, setIsCamOff] = useState(false);
+  const [isSharingScreen, setIsSharingScreen] = useState(false);
+  const [status, setStatus] = useState('');
+  const [screenSharingUsers, setScreenSharingUsers] = useState({});
+  const [spotlightUser, setSpotlightUser] = useState(null);
 
-  const localVideoRef  = useRef(null);
-  const remoteVideoRef = useRef(null);
-  const pcRef          = useRef(null);
+  const inCallRef = useRef(false);
   const localStreamRef = useRef(null);
-  const callStateRef   = useRef('idle');
-
-  // Keep callStateRef in sync so the window event handler always
-  // sees the latest state without stale closure issues
-  useEffect(() => {
-    callStateRef.current = callState;
-  }, [callState]);
-
-  const cleanupCall = useCallback(() => {
-    if (localStreamRef.current) {
-      localStreamRef.current.getTracks().forEach((t) => t.stop());
-      localStreamRef.current = null;
-    }
-    if (pcRef.current) {
-      pcRef.current.close();
-      pcRef.current = null;
-    }
-    if (localVideoRef.current)  localVideoRef.current.srcObject  = null;
-    if (remoteVideoRef.current) remoteVideoRef.current.srcObject = null;
-    callStateRef.current = 'idle';
-    setCallState('idle');
-    setRemoteUser(null);
-    setIncomingSignal(null);
-    setIsMuted(false);
-    setIsCamOff(false);
-    setShowWhiteboard(false);
-  }, []);
+  const cameraTrackRef = useRef(null);
+  const screenTrackRef = useRef(null);
+  const peerConnectionsRef = useRef(new Map());
+  const pendingCandidatesRef = useRef(new Map());
+  const makingOfferRef = useRef(new Set());
 
   useEffect(() => {
-    return () => cleanupCall();
-  }, [cleanupCall]);
+    inCallRef.current = inCall;
+  }, [inCall]);
 
   const sendSignal = useCallback((signal) => {
     if (!stompClient?.connected) return;
@@ -80,625 +99,527 @@ export default function VideoCall({
     });
   }, [stompClient, roomId]);
 
-  const createPeerConnection = useCallback((target) => {
+  const setRemoteStreamForUser = (username, stream) => {
+    setRemoteStreams((prev) => ({ ...prev, [username]: stream }));
+  };
+
+  const removeRemoteUser = (username) => {
+    setRemoteStreams((prev) => {
+      const next = { ...prev };
+      delete next[username];
+      return next;
+    });
+    const pc = peerConnectionsRef.current.get(username);
+    if (pc) pc.close();
+    peerConnectionsRef.current.delete(username);
+    pendingCandidatesRef.current.delete(username);
+  };
+
+  const flushPendingCandidates = useCallback(async (username) => {
+    const pc = peerConnectionsRef.current.get(username);
+    if (!pc?.remoteDescription) return;
+    const queued = pendingCandidatesRef.current.get(username) || [];
+    pendingCandidatesRef.current.set(username, []);
+    for (const candidate of queued) {
+      try {
+        await pc.addIceCandidate(candidate);
+      } catch (e) {
+        console.warn('Queued ICE error ignored:', e.message);
+      }
+    }
+  }, []);
+
+  const createPeerConnection = useCallback((username) => {
+    const existing = peerConnectionsRef.current.get(username);
+    if (existing && existing.signalingState !== 'closed') return existing;
+
     const pc = new RTCPeerConnection(ICE_SERVERS);
-    pcRef.current = pc;
+    peerConnectionsRef.current.set(username, pc);
 
     pc.onicecandidate = (event) => {
       if (event.candidate) {
         sendSignal({
-          type:      'ICE_CANDIDATE',
-          from:      currentUser,
-          to:        target,
-          roomId:    roomId,
+          type: 'ICE_CANDIDATE',
+          from: currentUser,
+          to: username,
+          roomId,
           candidate: JSON.stringify(event.candidate),
         });
       }
     };
 
     pc.ontrack = (event) => {
-      if (remoteVideoRef.current && event.streams[0]) {
-        remoteVideoRef.current.srcObject = event.streams[0];
-      }
+      const [stream] = event.streams;
+      if (stream) setRemoteStreamForUser(username, stream);
     };
 
     pc.onconnectionstatechange = () => {
-      console.log('[WebRTC] state:', pc.connectionState);
-      if (
-        pc.connectionState === 'disconnected' ||
-        pc.connectionState === 'failed'
-      ) {
-        cleanupCall();
+      if (['failed', 'disconnected'].includes(pc.connectionState)) {
+        try {
+          pc.restartIce();
+        } catch (e) {
+          console.warn('ICE restart failed:', e.message);
+        }
+      }
+      if (['closed', 'failed'].includes(pc.connectionState)) {
+        removeRemoteUser(username);
       }
     };
 
+    const stream = localStreamRef.current;
+    if (stream) {
+      stream.getTracks().forEach((track) => pc.addTrack(track, stream));
+    }
+
     return pc;
-  }, [currentUser, roomId, sendSignal, cleanupCall]);
+  }, [currentUser, roomId, sendSignal]);
 
-  // ── Signal handler ────────────────────────────────────────────────────────
-  const handleSignal = useCallback(async (signal) => {
-    const state = callStateRef.current;
-    console.log('[Signal] handling:', signal.type,
-      'from:', signal.from, 'state:', state);
+  const ensureLocalStream = useCallback(async () => {
+    if (localStreamRef.current) return localStreamRef.current;
 
-    if (signal.type === 'CALL_OFFER') {
-      if (state !== 'idle') {
-        console.log('[Signal] ignoring offer, already in state:', state);
-        return;
-      }
-      setIncomingSignal(signal);
-      setRemoteUser(signal.from);
-      callStateRef.current = 'incoming';
-      setCallState('incoming');
-      return;
-    }
-
-    if (signal.type === 'CALL_ANSWER') {
-      // Only handle if WE are the caller waiting for an answer
-      if (state !== 'calling') {
-        console.log('[Signal] ignoring answer, not in calling state:', state);
-        return;
-      }
-      if (signal.accepted) {
-        try {
-          const answer = JSON.parse(signal.sdp);
-          await pcRef.current?.setRemoteDescription(
-            new RTCSessionDescription(answer)
-          );
-          callStateRef.current = 'in-call';
-          setCallState('in-call');
-        } catch (e) {
-          console.error('Failed to set remote description', e);
-          cleanupCall();
-        }
-      } else {
-        alert(signal.from + ' declined the call.');
-        cleanupCall();
-      }
-      return;
-    }
-
-    if (signal.type === 'ICE_CANDIDATE') {
-      if (pcRef.current && signal.candidate) {
-        try {
-          await pcRef.current.addIceCandidate(
-            new RTCIceCandidate(JSON.parse(signal.candidate))
-          );
-        } catch (e) {
-          console.warn('ICE error (ignored):', e.message);
-        }
-      }
-      return;
-    }
-
-    if (signal.type === 'CALL_END') {
-      if (state !== 'idle') {
-        alert(signal.from + ' ended the call.');
-        cleanupCall();
-      }
-    }
-  }, [cleanupCall]);
-
-  // Listen to window event — dispatched by RoomPage (single subscription)
-  useEffect(() => {
-    const handler = (e) => handleSignal(e.detail);
-    window.addEventListener('webrtc-signal', handler);
-    return () => window.removeEventListener('webrtc-signal', handler);
-  }, [handleSignal]);
-
-  const getLocalStream = async () => {
     const stream = await navigator.mediaDevices.getUserMedia({
       video: true,
       audio: true,
     });
-    localStreamRef.current = stream;
-    if (localVideoRef.current) {
-      localVideoRef.current.srcObject = stream;
-    }
-    return stream;
-  };
 
-  const startCall = async (target) => {
-    if (callStateRef.current !== 'idle') return;
-    setRemoteUser(target);
-    callStateRef.current = 'calling';
-    setCallState('calling');
+    localStreamRef.current = stream;
+    cameraTrackRef.current = stream.getVideoTracks()[0] || null;
+    setLocalStream(stream);
+    return stream;
+  }, []);
+
+  const createOfferForUser = useCallback(async (username) => {
+    if (!username || username === currentUser || makingOfferRef.current.has(username)) return;
+    makingOfferRef.current.add(username);
     try {
-      const stream = await getLocalStream();
-      const pc     = createPeerConnection(target);
-      stream.getTracks().forEach((track) => pc.addTrack(track, stream));
+      await ensureLocalStream();
+      const pc = createPeerConnection(username);
       const offer = await pc.createOffer({
         offerToReceiveAudio: true,
         offerToReceiveVideo: true,
       });
       await pc.setLocalDescription(offer);
       sendSignal({
-        type:   'CALL_OFFER',
-        from:   currentUser,
-        to:     target,
-        roomId: roomId,
-        sdp:    JSON.stringify(offer),
+        type: 'CALL_OFFER',
+        from: currentUser,
+        to: username,
+        roomId,
+        sdp: JSON.stringify(offer),
       });
     } catch (e) {
-      console.error('startCall failed:', e);
-      alert('Could not access camera/microphone. Please allow permissions.');
-      cleanupCall();
+      console.error('Could not create offer:', e);
+      setStatus('Could not start video. Check camera/mic permission.');
+    } finally {
+      makingOfferRef.current.delete(username);
     }
-  };
+  }, [createPeerConnection, currentUser, ensureLocalStream, roomId, sendSignal]);
 
-  const acceptCall = async () => {
-    if (!incomingSignal) return;
-    const caller = incomingSignal.from;
-    callStateRef.current = 'in-call';
-    setCallState('in-call');
+  const joinVideo = useCallback(async () => {
     try {
-      const stream = await getLocalStream();
-      const pc     = createPeerConnection(caller);
-      stream.getTracks().forEach((track) => pc.addTrack(track, stream));
-      const offer = JSON.parse(incomingSignal.sdp);
-      await pc.setRemoteDescription(new RTCSessionDescription(offer));
+      await ensureLocalStream();
+      setInCall(true);
+      inCallRef.current = true;
+      setIncomingFrom(null);
+      setStatus('Video joined');
+      otherUsers.forEach((username) => createOfferForUser(username));
+    } catch (e) {
+      console.error('getUserMedia failed:', e);
+      setStatus('Camera or microphone permission was denied.');
+    }
+  }, [createOfferForUser, ensureLocalStream, otherUsers]);
+
+  const leaveVideo = useCallback(() => {
+    otherUsers.forEach((username) => {
+      sendSignal({
+        type: 'CALL_END',
+        from: currentUser,
+        to: username,
+        roomId,
+      });
+    });
+
+    peerConnectionsRef.current.forEach((pc) => pc.close());
+    peerConnectionsRef.current.clear();
+    pendingCandidatesRef.current.clear();
+
+    if (localStreamRef.current) {
+      localStreamRef.current.getTracks().forEach((track) => track.stop());
+    }
+
+    localStreamRef.current = null;
+    cameraTrackRef.current = null;
+    screenTrackRef.current = null;
+    setLocalStream(null);
+    setRemoteStreams({});
+    setInCall(false);
+    inCallRef.current = false;
+    setIncomingFrom(null);
+    setIsMuted(false);
+    setIsCamOff(false);
+    setIsSharingScreen(false);
+    setStatus('');
+  }, [currentUser, otherUsers, roomId, sendSignal]);
+
+  useEffect(() => {
+    const peerConnections = peerConnectionsRef.current;
+    return () => {
+      peerConnections.forEach((pc) => pc.close());
+      peerConnections.clear();
+      if (localStreamRef.current) {
+        localStreamRef.current.getTracks().forEach((track) => track.stop());
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!inCall || !connected) return;
+    otherUsers.forEach((username) => {
+      if (!peerConnectionsRef.current.has(username)) {
+        createOfferForUser(username);
+      }
+    });
+  }, [connected, createOfferForUser, inCall, otherUsers]);
+
+  const answerOffer = useCallback(async (signal) => {
+    try {
+      await ensureLocalStream();
+      setInCall(true);
+      inCallRef.current = true;
+      const pc = createPeerConnection(signal.from);
+      await pc.setRemoteDescription(new RTCSessionDescription(JSON.parse(signal.sdp)));
+      await flushPendingCandidates(signal.from);
       const answer = await pc.createAnswer();
       await pc.setLocalDescription(answer);
       sendSignal({
-        type:     'CALL_ANSWER',
-        from:     currentUser,
-        to:       caller,
-        roomId:   roomId,
-        sdp:      JSON.stringify(answer),
+        type: 'CALL_ANSWER',
+        from: currentUser,
+        to: signal.from,
+        roomId,
+        sdp: JSON.stringify(answer),
         accepted: true,
       });
-      setIncomingSignal(null);
+      setIncomingFrom(null);
+      setStatus('Video connected');
     } catch (e) {
-      console.error('acceptCall failed:', e);
-      declineCall();
+      console.error('Could not answer offer:', e);
+      sendSignal({
+        type: 'CALL_ANSWER',
+        from: currentUser,
+        to: signal.from,
+        roomId,
+        accepted: false,
+      });
+      setStatus('Could not answer call. Check camera/mic permission.');
+    }
+  }, [createPeerConnection, currentUser, ensureLocalStream, flushPendingCandidates, roomId, sendSignal]);
+
+  const handleSignal = useCallback(async (signal) => {
+    if (!signal || signal.from === currentUser) return;
+
+    if (signal.type === 'CALL_OFFER') {
+      if (inCallRef.current) {
+        await answerOffer(signal);
+      } else {
+        setIncomingFrom(signal.from);
+        window.__pendingVideoOffer = signal;
+      }
+      return;
+    }
+
+    if (signal.type === 'CALL_ANSWER') {
+      const pc = peerConnectionsRef.current.get(signal.from);
+      if (!pc) return;
+      if (signal.accepted === true && signal.sdp) {
+        await pc.setRemoteDescription(new RTCSessionDescription(JSON.parse(signal.sdp)));
+        await flushPendingCandidates(signal.from);
+        setStatus('Video connected');
+      } else {
+        removeRemoteUser(signal.from);
+        setStatus(signal.from + ' could not join video.');
+      }
+      return;
+    }
+
+    if (signal.type === 'ICE_CANDIDATE' && signal.candidate) {
+      const candidate = new RTCIceCandidate(JSON.parse(signal.candidate));
+      const pc = peerConnectionsRef.current.get(signal.from);
+      if (pc?.remoteDescription) {
+        try {
+          await pc.addIceCandidate(candidate);
+        } catch (e) {
+          console.warn('ICE candidate ignored:', e.message);
+        }
+      } else {
+        const queued = pendingCandidatesRef.current.get(signal.from) || [];
+        queued.push(candidate);
+        pendingCandidatesRef.current.set(signal.from, queued);
+      }
+      return;
+    }
+
+    if (signal.type === 'CALL_END') {
+      removeRemoteUser(signal.from);
+      setScreenSharingUsers((prev) => {
+        const next = { ...prev };
+        delete next[signal.from];
+        return next;
+      });
+      return;
+    }
+
+    if (signal.type === 'SCREEN_SHARE_START') {
+      setScreenSharingUsers((prev) => ({ ...prev, [signal.from]: true }));
+      return;
+    }
+
+    if (signal.type === 'SCREEN_SHARE_STOP') {
+      setScreenSharingUsers((prev) => {
+        const next = { ...prev };
+        delete next[signal.from];
+        return next;
+      });
+    }
+  }, [answerOffer, currentUser, flushPendingCandidates]);
+
+  useEffect(() => {
+    const handler = (event) => handleSignal(event.detail);
+    window.addEventListener('webrtc-signal', handler);
+    return () => window.removeEventListener('webrtc-signal', handler);
+  }, [handleSignal]);
+
+  const acceptIncoming = async () => {
+    if (window.__pendingVideoOffer) {
+      await answerOffer(window.__pendingVideoOffer);
+      window.__pendingVideoOffer = null;
+    } else {
+      await joinVideo();
     }
   };
 
-  const declineCall = useCallback(() => {
-    if (incomingSignal) {
+  const declineIncoming = () => {
+    const signal = window.__pendingVideoOffer;
+    if (signal) {
       sendSignal({
-        type:     'CALL_ANSWER',
-        from:     currentUser,
-        to:       incomingSignal.from,
-        roomId:   roomId,
+        type: 'CALL_ANSWER',
+        from: currentUser,
+        to: signal.from,
+        roomId,
         accepted: false,
       });
     }
-    setIncomingSignal(null);
-    cleanupCall();
-  }, [incomingSignal, sendSignal, currentUser, roomId, cleanupCall]);
-
-  const endCall = useCallback(() => {
-    if (remoteUser) {
-      sendSignal({
-        type:   'CALL_END',
-        from:   currentUser,
-        to:     remoteUser,
-        roomId: roomId,
-      });
-    }
-    cleanupCall();
-  }, [remoteUser, sendSignal, currentUser, roomId, cleanupCall]);
+    window.__pendingVideoOffer = null;
+    setIncomingFrom(null);
+  };
 
   const toggleMute = () => {
-    if (!localStreamRef.current) return;
-    localStreamRef.current.getAudioTracks().forEach((t) => {
-      t.enabled = !t.enabled;
+    const stream = localStreamRef.current;
+    if (!stream) return;
+    stream.getAudioTracks().forEach((track) => {
+      track.enabled = !track.enabled;
     });
     setIsMuted((prev) => !prev);
   };
 
   const toggleCamera = () => {
-    if (!localStreamRef.current) return;
-    localStreamRef.current.getVideoTracks().forEach((t) => {
-      t.enabled = !t.enabled;
+    const stream = localStreamRef.current;
+    if (!stream) return;
+    stream.getVideoTracks().forEach((track) => {
+      if (track === screenTrackRef.current) return;
+      track.enabled = !track.enabled;
     });
     setIsCamOff((prev) => !prev);
   };
 
-  // ── Inline whiteboard for during-call use ────────────────────────────────
-  const WbCanvas = () => {
-    const cvRef   = useRef(null);
-    const drawing = useRef(false);
-    const last    = useRef({ x: 0, y: 0 });
-    const [wbColor, setWbColor] = useState('#ffffff');
-    const [wbEraser, setWbEraser] = useState(false);
-
-    useEffect(() => {
-      const cv  = cvRef.current;
-      if (!cv) return;
-      const ctx = cv.getContext('2d');
-      ctx.fillStyle = '#1f2937';
-      ctx.fillRect(0, 0, cv.width, cv.height);
-    }, []);
-
-    const getP = (e) => {
-      const r  = cvRef.current.getBoundingClientRect();
-      const sx = cvRef.current.width  / r.width;
-      const sy = cvRef.current.height / r.height;
-      return {
-        x: (e.clientX - r.left) * sx,
-        y: (e.clientY - r.top)  * sy,
-      };
-    };
-
-    const onDown = (e) => { drawing.current = true; last.current = getP(e); };
-    const onMove = (e) => {
-      if (!drawing.current) return;
-      const cv  = cvRef.current;
-      const ctx = cv.getContext('2d');
-      const p   = getP(e);
-      ctx.beginPath();
-      ctx.moveTo(last.current.x, last.current.y);
-      ctx.lineTo(p.x, p.y);
-      ctx.strokeStyle = wbEraser ? '#1f2937' : wbColor;
-      ctx.lineWidth   = wbEraser ? 20 : 3;
-      ctx.lineCap     = 'round';
-      ctx.stroke();
-      last.current = p;
-    };
-    const onUp = () => { drawing.current = false; };
-
-    const COLORS = ['#ffffff','#ef4444','#f97316',
-                    '#eab308','#22c55e','#3b82f6','#a855f7'];
-
-    return (
-      <div style={{
-        width: '100%', height: '100%', display: 'flex',
-        flexDirection: 'column', background: '#111827',
-      }}>
-        <div style={{
-          display: 'flex', gap: 6, padding: '6px 10px',
-          alignItems: 'center', background: '#1f2937', flexShrink: 0,
-          flexWrap: 'wrap',
-        }}>
-          {COLORS.map((c) => (
-            <button key={c}
-              onClick={() => { setWbColor(c); setWbEraser(false); }}
-              style={{
-                width: 16, height: 16, borderRadius: '50%',
-                background: c, border: wbColor === c && !wbEraser
-                  ? '2px solid #818cf8' : '2px solid transparent',
-                cursor: 'pointer', flexShrink: 0,
-              }} />
-          ))}
-          <button
-            onClick={() => setWbEraser((v) => !v)}
-            style={{
-              fontSize: 10, color: wbEraser ? '#818cf8' : '#9ca3af',
-              background: 'none', border: 'none', cursor: 'pointer',
-              fontWeight: 500,
-            }}>
-            Eraser
-          </button>
-          <button
-            onClick={() => {
-              const cv  = cvRef.current;
-              const ctx = cv.getContext('2d');
-              ctx.fillStyle = '#1f2937';
-              ctx.fillRect(0, 0, cv.width, cv.height);
-            }}
-            style={{
-              fontSize: 10, color: '#f87171', background: 'none',
-              border: 'none', cursor: 'pointer', fontWeight: 500,
-            }}>
-            Clear
-          </button>
-        </div>
-        <canvas
-          ref={cvRef}
-          width={800}
-          height={600}
-          style={{
-            flex: 1, width: '100%',
-            cursor: wbEraser ? 'cell' : 'crosshair',
-          }}
-          onMouseDown={onDown}
-          onMouseMove={onMove}
-          onMouseUp={onUp}
-          onMouseLeave={onUp}
-        />
-      </div>
-    );
+  const replaceVideoTrack = async (track) => {
+    const replacements = [];
+    peerConnectionsRef.current.forEach((pc) => {
+      const sender = pc.getSenders().find((item) => item.track?.kind === 'video');
+      if (sender) replacements.push(sender.replaceTrack(track));
+    });
+    await Promise.all(replacements);
   };
 
-  // ── Render ────────────────────────────────────────────────────────────────
+  const notifyScreenShare = (type) => {
+    otherUsers.forEach((username) => {
+      sendSignal({
+        type,
+        from: currentUser,
+        to: username,
+        roomId,
+      });
+    });
+  };
+
+  const toggleScreenShare = async () => {
+    if (!inCallRef.current) return;
+
+    if (isSharingScreen) {
+      const cameraTrack = cameraTrackRef.current;
+      if (cameraTrack) {
+        await replaceVideoTrack(cameraTrack);
+        if (screenTrackRef.current) screenTrackRef.current.stop();
+        screenTrackRef.current = null;
+        setLocalStream(localStreamRef.current);
+        notifyScreenShare('SCREEN_SHARE_STOP');
+      }
+      setIsSharingScreen(false);
+      return;
+    }
+
+    try {
+      const displayStream = await navigator.mediaDevices.getDisplayMedia({
+        video: {
+          displaySurface: 'monitor',
+        },
+        audio: false,
+      });
+      const screenTrack = displayStream.getVideoTracks()[0];
+      screenTrackRef.current = screenTrack;
+      await replaceVideoTrack(screenTrack);
+      setLocalStream(displayStream);
+      setIsSharingScreen(true);
+      notifyScreenShare('SCREEN_SHARE_START');
+
+      screenTrack.onended = async () => {
+        const cameraTrack = cameraTrackRef.current;
+        if (cameraTrack) await replaceVideoTrack(cameraTrack);
+        setLocalStream(localStreamRef.current);
+        screenTrackRef.current = null;
+        setIsSharingScreen(false);
+        notifyScreenShare('SCREEN_SHARE_STOP');
+      };
+    } catch (e) {
+      console.warn('Screen share cancelled or failed:', e.message);
+      setStatus('Screen share was cancelled or blocked by the browser.');
+    }
+  };
+
+  const remoteEntries = Object.entries(remoteStreams);
+  const participantCount = (inCall ? 1 : 0) + remoteEntries.length;
+  const allTiles = [
+    ...(inCall ? [{
+      username: currentUser,
+      stream: localStream,
+      muted: true,
+      local: true,
+      camOff: isCamOff && !isSharingScreen,
+      isScreenShare: isSharingScreen,
+    }] : []),
+    ...remoteEntries.map(([username, stream]) => ({
+      username,
+      stream,
+      muted: false,
+      local: false,
+      camOff: false,
+      isScreenShare: Boolean(screenSharingUsers[username]),
+    })),
+  ];
+  const spotlightTile = allTiles.find((tile) => tile.username === spotlightUser);
 
   return (
-    <>
-      {/* Call buttons — one per other user */}
-      {callState === 'idle' && otherUsers && otherUsers.map((u) => (
-        <button
-          key={u}
-          onClick={() => startCall(u)}
-          style={{
-            width: '100%', display: 'flex', alignItems: 'center',
-            gap: 8, padding: '6px 8px', borderRadius: 8,
-            background: 'none', border: 'none', cursor: 'pointer',
-            color: '#4f46e5', fontSize: 13, fontWeight: 500,
-            marginBottom: 4,
-          }}
-          onMouseEnter={(e) => e.currentTarget.style.background = '#eef2ff'}
-          onMouseLeave={(e) => e.currentTarget.style.background = 'none'}>
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none"
-               stroke="currentColor" strokeWidth="2">
-            <path d="M23 7l-7 5 7 5V7z" />
-            <rect x="1" y="5" width="15" height="14" rx="2" />
-          </svg>
-          Call {u}
-        </button>
-      ))}
-
-      {/* Calling dialog */}
-      {callState === 'calling' && (
-        <div style={{
-          position: 'fixed', inset: 0, zIndex: 9999,
-          background: 'rgba(0,0,0,0.75)',
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-        }}>
-          <div style={{
-            background: '#fff', borderRadius: 20, padding: '40px 32px',
-            textAlign: 'center', maxWidth: 320, width: '90%',
-            boxShadow: '0 20px 60px rgba(0,0,0,0.3)',
-          }}>
-            <div style={{
-              width: 72, height: 72, borderRadius: '50%',
-              background: '#eef2ff', margin: '0 auto 16px',
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-              fontSize: 32,
-            }}>
-              {remoteUser ? remoteUser.charAt(0).toUpperCase() : '?'}
+    <div className="flex h-full min-h-0 flex-col bg-slate-950 text-white">
+      {spotlightTile && (
+        <div className="fixed inset-0 z-[9999] flex flex-col bg-black">
+          <div className="flex items-center justify-between px-4 py-3">
+            <div>
+              <p className="text-sm font-black">
+                {spotlightTile.isScreenShare
+                  ? `${spotlightTile.local ? 'Your' : spotlightTile.username + "'s"} screen`
+                  : spotlightTile.local ? 'You' : spotlightTile.username}
+              </p>
+              <p className="text-xs text-slate-400">Spotlight view</p>
             </div>
-            <p style={{ fontWeight: 700, fontSize: 18, margin: '0 0 6px',
-                        color: '#111827' }}>
-              Calling {remoteUser}...
-            </p>
-            <p style={{ color: '#9ca3af', fontSize: 14, margin: '0 0 28px' }}>
-              Waiting for answer...
-            </p>
-            <button onClick={endCall} style={{
-              width: '100%', background: '#ef4444', color: '#fff',
-              border: 'none', borderRadius: 12, padding: '12px 0',
-              fontSize: 14, fontWeight: 600, cursor: 'pointer',
-              display: 'flex', alignItems: 'center',
-              justifyContent: 'center', gap: 8,
-            }}>
-              Cancel
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* Incoming call dialog */}
-      {callState === 'incoming' && (
-        <div style={{
-          position: 'fixed', inset: 0, zIndex: 9999,
-          background: 'rgba(0,0,0,0.75)',
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-        }}>
-          <div style={{
-            background: '#fff', borderRadius: 20, padding: '40px 32px',
-            textAlign: 'center', maxWidth: 320, width: '90%',
-            boxShadow: '0 20px 60px rgba(0,0,0,0.3)',
-          }}>
-            <div style={{
-              width: 72, height: 72, borderRadius: '50%',
-              background: '#ecfdf5', margin: '0 auto 16px',
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-              fontSize: 32,
-            }}>
-              {remoteUser ? remoteUser.charAt(0).toUpperCase() : '?'}
-            </div>
-            <p style={{ fontWeight: 700, fontSize: 18, margin: '0 0 6px',
-                        color: '#111827' }}>
-              {remoteUser} is calling
-            </p>
-            <p style={{ color: '#9ca3af', fontSize: 14, margin: '0 0 28px' }}>
-              Incoming video call
-            </p>
-            <div style={{ display: 'flex', gap: 12 }}>
-              <button onClick={declineCall} style={{
-                flex: 1, background: '#f3f4f6', color: '#374151',
-                border: 'none', borderRadius: 12, padding: '12px 0',
-                fontSize: 14, fontWeight: 600, cursor: 'pointer',
-              }}>
-                Decline
-              </button>
-              <button onClick={acceptCall} style={{
-                flex: 1, background: '#10b981', color: '#fff',
-                border: 'none', borderRadius: 12, padding: '12px 0',
-                fontSize: 14, fontWeight: 600, cursor: 'pointer',
-              }}>
-                Accept
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* In-call screen */}
-      {callState === 'in-call' && (
-        <div style={{
-          position: 'fixed', inset: 0, zIndex: 9999,
-          background: '#111827', display: 'flex', flexDirection: 'column',
-        }}>
-
-          {/* Header bar */}
-          <div style={{
-            display: 'flex', alignItems: 'center',
-            justifyContent: 'space-between',
-            padding: '10px 20px', background: '#1f2937', flexShrink: 0,
-          }}>
-            <span style={{ color: '#fff', fontWeight: 600, fontSize: 14 }}>
-              In call with {remoteUser}
-            </span>
             <button
-              onClick={() => setShowWhiteboard((v) => !v)}
-              style={{
-                display: 'flex', alignItems: 'center', gap: 6,
-                background: showWhiteboard ? '#4f46e5' : '#374151',
-                color: '#fff', border: 'none', borderRadius: 8,
-                padding: '6px 14px', fontSize: 12, fontWeight: 600,
-                cursor: 'pointer',
-              }}>
-              {showWhiteboard ? 'Hide Board' : 'Whiteboard'}
+              onClick={() => setSpotlightUser(null)}
+              className="rounded-2xl bg-white/10 px-4 py-2 text-sm font-black text-white hover:bg-white/20">
+              Minimize
             </button>
           </div>
-
-          {/* Video + optional whiteboard */}
-          <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
-
-            {/* Video area */}
-            <div style={{
-              flex: showWhiteboard ? '0 0 55%' : '1',
-              position: 'relative', background: '#000',
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-            }}>
-              <video ref={remoteVideoRef} autoPlay playsInline
-                style={{ width: '100%', height: '100%',
-                         objectFit: 'cover' }} />
-
-              {/* No remote video placeholder */}
-              <div style={{
-                position: 'absolute',
-                display: 'flex', flexDirection: 'column',
-                alignItems: 'center', justifyContent: 'center',
-                color: '#4b5563', pointerEvents: 'none',
-              }}>
-                <div style={{
-                  width: 80, height: 80, borderRadius: '50%',
-                  background: '#1f2937',
-                  display: 'flex', alignItems: 'center',
-                  justifyContent: 'center', fontSize: 36,
-                  marginBottom: 8, color: '#6b7280',
-                }}>
-                  {remoteUser ? remoteUser.charAt(0).toUpperCase() : '?'}
-                </div>
-                <p style={{ fontSize: 13, margin: 0 }}>{remoteUser}</p>
-              </div>
-
-              {/* Local video PiP */}
-              <div style={{
-                position: 'absolute', bottom: 16, right: 16,
-                width: 140, height: 90, borderRadius: 10,
-                overflow: 'hidden', border: '2px solid #374151',
-                background: '#1f2937',
-                boxShadow: '0 4px 16px rgba(0,0,0,0.5)',
-              }}>
-                <video ref={localVideoRef} autoPlay playsInline muted
-                  style={{ width: '100%', height: '100%',
-                           objectFit: 'cover' }} />
-                {isCamOff && (
-                  <div style={{
-                    position: 'absolute', inset: 0, background: '#1f2937',
-                    display: 'flex', alignItems: 'center',
-                    justifyContent: 'center', color: '#6b7280', fontSize: 11,
-                  }}>
-                    Cam off
-                  </div>
-                )}
-              </div>
-            </div>
-
-            {/* Whiteboard panel */}
-            {showWhiteboard && (
-              <div style={{
-                flex: '0 0 45%', borderLeft: '1px solid #374151',
-              }}>
-                <WbCanvas />
-              </div>
-            )}
-          </div>
-
-          {/* Controls */}
-          <div style={{
-            display: 'flex', alignItems: 'center',
-            justifyContent: 'center', gap: 16,
-            padding: '16px 0', background: '#1f2937', flexShrink: 0,
-          }}>
-
-            {/* Mic */}
-            <button onClick={toggleMute} title={isMuted ? 'Unmute' : 'Mute'}
-              style={{
-                width: 52, height: 52, borderRadius: '50%',
-                background: isMuted ? '#ef4444' : '#374151',
-                border: 'none', cursor: 'pointer', color: '#fff',
-                display: 'flex', alignItems: 'center',
-                justifyContent: 'center',
-              }}>
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none"
-                   stroke="currentColor" strokeWidth="2.5"
-                   strokeLinecap="round" strokeLinejoin="round">
-                {isMuted ? (
-                  <>
-                    <line x1="1" y1="1" x2="23" y2="23" />
-                    <path d="M9 9v3a3 3 0 0 0 5.12 2.12" />
-                    <path d="M15 9.34V4a3 3 0 0 0-5.94-.6" />
-                    <path d="M17 16.95A7 7 0 0 1 5 12v-2" />
-                    <line x1="12" y1="19" x2="12" y2="23" />
-                    <line x1="8" y1="23" x2="16" y2="23" />
-                  </>
-                ) : (
-                  <>
-                    <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" />
-                    <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
-                    <line x1="12" y1="19" x2="12" y2="23" />
-                    <line x1="8" y1="23" x2="16" y2="23" />
-                  </>
-                )}
-              </svg>
-            </button>
-
-            {/* Camera */}
-            <button onClick={toggleCamera}
-              title={isCamOff ? 'Turn on camera' : 'Turn off camera'}
-              style={{
-                width: 52, height: 52, borderRadius: '50%',
-                background: isCamOff ? '#ef4444' : '#374151',
-                border: 'none', cursor: 'pointer', color: '#fff',
-                display: 'flex', alignItems: 'center',
-                justifyContent: 'center',
-              }}>
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none"
-                   stroke="currentColor" strokeWidth="2.5"
-                   strokeLinecap="round" strokeLinejoin="round">
-                {isCamOff ? (
-                  <>
-                    <line x1="1" y1="1" x2="23" y2="23" />
-                    <path d="M21 21H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h3" />
-                    <path d="M7 3h10l2 3h3a2 2 0 0 1 2 2v9.34" />
-                  </>
-                ) : (
-                  <>
-                    <path d="M23 7l-7 5 7 5V7z" />
-                    <rect x="1" y="5" width="15" height="14" rx="2" />
-                  </>
-                )}
-              </svg>
-            </button>
-
-            {/* End call */}
-            <button onClick={endCall} title="End call"
-              style={{
-                width: 64, height: 52, borderRadius: 30,
-                background: '#ef4444', border: 'none',
-                cursor: 'pointer', color: '#fff',
-                display: 'flex', alignItems: 'center',
-                justifyContent: 'center',
-              }}
-              onMouseEnter={(e) =>
-                e.currentTarget.style.background = '#dc2626'}
-              onMouseLeave={(e) =>
-                e.currentTarget.style.background = '#ef4444'}>
-              <svg width="22" height="22" viewBox="0 0 24 24"
-                   fill="currentColor">
-                <path d="M6.6 10.8c1.4 2.8 3.8 5.1 6.6 6.6l2.2-2.2c.3-.3.7-.4 1-.2 1.1.4 2.3.6 3.6.6.6 0 1 .4 1 1V20c0 .6-.4 1-1 1-9.4 0-17-7.6-17-17 0-.6.4-1 1-1h3.5c.6 0 1 .4 1 1 0 1.3.2 2.5.6 3.6.1.3 0 .7-.2 1L6.6 10.8z" />
-              </svg>
-            </button>
-
+          <div className="min-h-0 flex-1 p-2 sm:p-4">
+            <VideoTile
+              {...spotlightTile}
+              onSelect={() => {}}
+            />
           </div>
         </div>
       )}
-    </>
+
+      <div className="shrink-0 border-b border-white/10 bg-slate-900 px-3 py-3 sm:px-4">
+      {incomingFrom && (
+        <div className="mb-3 rounded-2xl border border-emerald-300/40 bg-emerald-400/10 p-3">
+          <p className="text-xs font-black text-emerald-800">{incomingFrom} started video</p>
+          <div className="mt-2 flex gap-2">
+            <button onClick={acceptIncoming}
+              className="flex-1 rounded-xl bg-emerald-600 px-3 py-2 text-xs font-black text-white">
+              Join
+            </button>
+            <button onClick={declineIncoming}
+              className="flex-1 rounded-xl bg-white px-3 py-2 text-xs font-black text-slate-600">
+              Ignore
+            </button>
+          </div>
+        </div>
+      )}
+
+      <div className="flex flex-wrap items-center gap-2">
+        {!inCall ? (
+          <button
+            onClick={joinVideo}
+            disabled={!connected}
+            className="w-full rounded-2xl bg-blue-600 px-4 py-3 text-sm font-black text-white transition hover:bg-blue-700 disabled:opacity-50">
+            Join video room
+          </button>
+        ) : (
+          <>
+            <button onClick={toggleMute}
+              className={'rounded-xl px-3 py-2 text-xs font-black text-white ' + (isMuted ? 'bg-red-600' : 'bg-slate-700')}>
+              {isMuted ? 'Unmute' : 'Mute'}
+            </button>
+            <button onClick={toggleCamera}
+              className={'rounded-xl px-3 py-2 text-xs font-black text-white ' + (isCamOff ? 'bg-red-600' : 'bg-slate-700')}>
+              {isCamOff ? 'Camera on' : 'Camera off'}
+            </button>
+            <button onClick={toggleScreenShare}
+              className={'rounded-xl px-3 py-2 text-xs font-black text-white ' + (isSharingScreen ? 'bg-indigo-600' : 'bg-slate-700')}>
+              {isSharingScreen ? 'Stop share' : 'Share screen'}
+            </button>
+            <button onClick={leaveVideo}
+              className="rounded-xl bg-red-600 px-3 py-2 text-xs font-black text-white">
+              Leave
+            </button>
+          </>
+        )}
+      </div>
+
+      {status && <p className="mt-2 text-xs font-semibold text-slate-400">{status}</p>}
+      </div>
+
+      <div className="min-h-0 flex-1 overflow-y-auto p-3 sm:p-4">
+        {allTiles.length === 0 ? (
+          <div className="flex h-full min-h-[20rem] items-center justify-center rounded-3xl border border-white/10 bg-white/5 p-8 text-center">
+            <div>
+              <p className="text-lg font-black">Video meeting is ready</p>
+              <p className="mt-2 max-w-md text-sm leading-6 text-slate-400">
+                Join the video room to start camera, audio, and screen sharing. On mobile, use this Video tab.
+              </p>
+            </div>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
+            {allTiles.map((tile) => (
+          <VideoTile
+            key={tile.username}
+            {...tile}
+            onSelect={() => setSpotlightUser(tile.username)}
+          />
+            ))}
+          </div>
+        )}
+      </div>
+
+      <p className="shrink-0 border-t border-white/10 px-4 py-2 text-xs leading-5 text-slate-400">
+        Participants on video: {participantCount}. Click any video or shared screen to enlarge it. For 100-user production video, connect this UI to an SFU service like LiveKit, mediasoup, or Twilio.
+      </p>
+    </div>
   );
 }

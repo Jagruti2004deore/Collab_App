@@ -1,21 +1,27 @@
 package com.collabapp.controller;
 
 import java.security.Principal;
+import java.util.Base64;
 import java.util.List;
 import java.util.Set;
 
+import org.springframework.http.MediaType;
 import org.springframework.messaging.handler.annotation.DestinationVariable;
 import org.springframework.messaging.handler.annotation.MessageMapping;
 import org.springframework.messaging.handler.annotation.Payload;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.multipart.MultipartFile;
 
 import com.collabapp.dto.ChatMessageDTO;
 import com.collabapp.dto.PresenceMessage;
 import com.collabapp.service.ChatService;
 import com.collabapp.service.RoomPresenceService;
+import com.collabapp.service.RoomService;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -27,6 +33,7 @@ public class ChatController {
 
     private final ChatService chatService;
     private final RoomPresenceService presenceService;
+    private final RoomService roomService;
     private final SimpMessagingTemplate messagingTemplate;
 
     @MessageMapping("/chat/{roomId}")
@@ -37,6 +44,8 @@ public void sendMessage(@DestinationVariable String roomId,
     String sender = (principal != null)
             ? principal.getName()
             : messageDTO.getSender();
+
+    roomService.assertCanAccess(roomId, sender);
 
     // Pass file fields through
     ChatMessageDTO saved = chatService.saveMessage(
@@ -69,6 +78,8 @@ public void sendMessage(@DestinationVariable String roomId,
             return;
         }
 
+        roomService.assertCanAccess(roomId, username);
+
         log.info("User {} joining room {}", username, roomId);
         presenceService.addUser(roomId, username);
 
@@ -96,6 +107,8 @@ public void sendMessage(@DestinationVariable String roomId,
 
         if (username == null) return;
 
+        roomService.assertCanAccess(roomId, username);
+
         log.info("User {} leaving room {}", username, roomId);
         presenceService.removeUser(roomId, username);
 
@@ -122,6 +135,8 @@ public void userTyping(@DestinationVariable String roomId,
 
     if (username == null) return;
 
+    roomService.assertCanAccess(roomId, username);
+
     PresenceMessage msg = PresenceMessage.builder()
             .eventType(payload.getEventType())
             .username(username)
@@ -133,12 +148,42 @@ public void userTyping(@DestinationVariable String roomId,
 }
 
     @GetMapping("/api/chat/{roomId}/history")
-    public List<ChatMessageDTO> getHistory(@PathVariable String roomId) {
+    public List<ChatMessageDTO> getHistory(@PathVariable String roomId,
+                                           Principal principal) {
+        roomService.assertCanAccess(roomId, principal.getName());
         return chatService.getMessageHistory(roomId);
     }
 
+    @PostMapping(value = "/api/chat/{roomId}/files", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public ChatMessageDTO uploadFile(@PathVariable String roomId,
+                                     @RequestParam("file") MultipartFile file,
+                                     Principal principal) throws java.io.IOException {
+        String username = principal.getName();
+        roomService.assertCanAccess(roomId, username);
+
+        String contentType = file.getContentType() != null
+                ? file.getContentType()
+                : MediaType.APPLICATION_OCTET_STREAM_VALUE;
+        String dataUrl = "data:" + contentType + ";base64,"
+                + Base64.getEncoder().encodeToString(file.getBytes());
+
+        ChatMessageDTO saved = chatService.saveMessage(
+                roomId,
+                username,
+                dataUrl,
+                "FILE",
+                file.getOriginalFilename(),
+                contentType
+        );
+
+        messagingTemplate.convertAndSend("/topic/room/" + roomId, saved);
+        return saved;
+    }
+
     @GetMapping("/api/rooms/{roomId}/online")
-    public Set<String> getOnlineUsers(@PathVariable String roomId) {
+    public Set<String> getOnlineUsers(@PathVariable String roomId,
+                                      Principal principal) {
+        roomService.assertCanAccess(roomId, principal.getName());
         return presenceService.getOnlineUsers(roomId);
     }
 }

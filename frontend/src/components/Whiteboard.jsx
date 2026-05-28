@@ -1,11 +1,19 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 
+const USER_COLORS = [
+  '#7c3aed','#0369a1','#047857','#b45309',
+  '#be123c','#0891b2','#4338ca','#065f46',
+];
+
 export default function Whiteboard({ roomId, currentUser, stompClient, connected }) {
   const canvasRef  = useRef(null);
   const isDrawing  = useRef(false);
   const lastPos    = useRef({ x: 0, y: 0 });
   const historyRef = useRef([]);
   const subsRef    = useRef([]);
+  const lastPublishRef = useRef(0);
+  const pendingStrokesRef = useRef([]);
+  const publishTimerRef = useRef(null);
 
   const [tool, setTool]           = useState('pen');
   const [color, setColor]         = useState('#3730a3');
@@ -19,11 +27,6 @@ export default function Whiteboard({ roomId, currentUser, stompClient, connected
     '#3730a3','#000000','#ef4444','#f97316',
     '#eab308','#22c55e','#3b82f6','#a855f7',
     '#ec4899','#ffffff',
-  ];
-
-  const USER_COLORS = [
-    '#7c3aed','#0369a1','#047857','#b45309',
-    '#be123c','#0891b2','#4338ca','#065f46',
   ];
 
   const getUserColor = useCallback((username) => {
@@ -43,6 +46,14 @@ export default function Whiteboard({ roomId, currentUser, stompClient, connected
     ctx.fillRect(0, 0, canvas.width, canvas.height);
     ctx.lineCap  = 'round';
     ctx.lineJoin = 'round';
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (publishTimerRef.current) {
+        clearTimeout(publishTimerRef.current);
+      }
+    };
   }, []);
 
   const drawStroke = useCallback((msg) => {
@@ -122,6 +133,37 @@ export default function Whiteboard({ roomId, currentUser, stompClient, connected
     };
   }, [stompClient, connected, roomId, handleIncomingMessage, drawStroke, currentUser]);
 
+  const sendStroke = useCallback((msg) => {
+    if (!stompClient?.connected) return;
+    stompClient.publish({
+      destination: '/app/whiteboard/' + roomId,
+      body: JSON.stringify(msg),
+    });
+  }, [stompClient, roomId]);
+
+  const queueStroke = useCallback((msg) => {
+    const now = performance.now();
+    const elapsed = now - lastPublishRef.current;
+
+    if (elapsed >= 16 && pendingStrokesRef.current.length === 0) {
+      lastPublishRef.current = now;
+      sendStroke(msg);
+      return;
+    }
+
+    pendingStrokesRef.current.push(msg);
+    if (publishTimerRef.current) return;
+
+    publishTimerRef.current = setTimeout(() => {
+      const queued = pendingStrokesRef.current.splice(0);
+      if (queued.length > 0) {
+        lastPublishRef.current = performance.now();
+        queued.forEach(sendStroke);
+      }
+      publishTimerRef.current = null;
+    }, Math.max(8, 16 - elapsed));
+  }, [sendStroke]);
+
   const publishStroke = useCallback((x0, y0, x1, y1) => {
     if (!stompClient?.connected) return;
     const usingEraser = tool === 'eraser';
@@ -136,11 +178,8 @@ export default function Whiteboard({ roomId, currentUser, stompClient, connected
     };
     drawStroke(msg);
     historyRef.current.push(msg);
-    stompClient.publish({
-      destination: '/app/whiteboard/' + roomId,
-      body: JSON.stringify(msg),
-    });
-  }, [stompClient, color, lineWidth, tool, currentUser, roomId, drawStroke]);
+    queueStroke(msg);
+  }, [stompClient, color, lineWidth, tool, currentUser, roomId, drawStroke, queueStroke]);
 
   const getPos = (e, canvas) => {
     const rect   = canvas.getBoundingClientRect();

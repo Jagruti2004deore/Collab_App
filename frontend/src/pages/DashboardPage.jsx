@@ -7,15 +7,15 @@ export default function DashboardPage() {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
 
-  const [myRooms, setMyRooms]         = useState([]);
+  const [myRooms, setMyRooms] = useState([]);
   const [joinedRooms, setJoinedRooms] = useState([]);
-  const [roomName, setRoomName]       = useState('');
-  const [joinId, setJoinId]           = useState('');
-  const [creating, setCreating]       = useState(false);
-  const [joining, setJoining]         = useState(false);
-  const [error, setError]             = useState('');
+  const [roomName, setRoomName] = useState('');
+  const [joinId, setJoinId] = useState('');
+  const [creating, setCreating] = useState(false);
+  const [joining, setJoining] = useState(false);
+  const [error, setError] = useState('');
   const [loadingRooms, setLoadingRooms] = useState(true);
-  const [copied, setCopied]           = useState(null);
+  const [copied, setCopied] = useState(null);
 
   useEffect(() => {
     fetchRooms();
@@ -57,21 +57,20 @@ export default function DashboardPage() {
     setError('');
     setJoining(true);
 
-    // Strip full URL — extract just the room ID
     let id = joinId.trim();
-    if (id.includes('/room/')) {
-      id = id.split('/room/')[1];
-    }
+    if (id.includes('/room/')) id = id.split('/room/')[1];
+    id = id.split('?')[0].replace(/\/$/, '');
 
     try {
       const res = await api.get(`/api/rooms/${id}/exists`);
       if (res.data.exists) {
+        await api.post(`/api/rooms/${id}/join-requests`);
         navigate(`/room/${id}`);
       } else {
         setError('Room not found. Check the room ID and try again.');
       }
     } catch {
-      setError('Room not found. Check the room ID and try again.');
+      setError('Room not found or request could not be sent.');
     } finally {
       setJoining(false);
     }
@@ -85,159 +84,168 @@ export default function DashboardPage() {
 
   const handleLogout = () => { logout(); navigate('/login'); };
 
-  const RoomCard = ({ room }) => (
-    <div key={room.roomId}
-      className="bg-white rounded-xl border border-gray-100 shadow-sm
-                 px-5 py-4 flex items-center justify-between">
-      <div>
-        <p className="font-medium text-gray-800">{room.roomName}</p>
-        <p className="text-xs text-gray-400 mt-0.5 font-mono truncate
-                      max-w-xs">
-          {room.roomId}
-        </p>
-      </div>
-      <div className="flex gap-2">
-        <button
-          onClick={() => copyRoomId(room.roomId)}
-          className="text-xs bg-gray-100 hover:bg-gray-200 text-gray-600
-                     px-3 py-1.5 rounded-lg transition">
-          {copied === room.roomId ? 'Copied!' : 'Copy ID'}
-        </button>
+  const RoomCard = ({ room, owned }) => (
+    <article className="group rounded-3xl border border-slate-200 bg-white p-5 shadow-sm transition hover:-translate-y-0.5 hover:shadow-xl">
+      <div className="flex items-start justify-between gap-4">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2">
+            <span className={`h-2.5 w-2.5 rounded-full ${owned ? 'bg-blue-500' : 'bg-emerald-500'}`} />
+            <p className="text-xs font-bold uppercase tracking-wide text-slate-400">
+              {owned ? 'Owned room' : 'Joined room'}
+            </p>
+          </div>
+          <h3 className="mt-3 truncate text-lg font-black text-slate-950">{room.roomName}</h3>
+          <p className="mt-1 truncate font-mono text-xs text-slate-400">{room.roomId}</p>
+        </div>
         <button
           onClick={() => navigate(`/room/${room.roomId}`)}
-          className="text-xs bg-indigo-600 hover:bg-indigo-700 text-white
-                     px-3 py-1.5 rounded-lg transition">
-          Enter
+          className="rounded-2xl bg-slate-950 px-4 py-2 text-xs font-bold text-white transition group-hover:bg-blue-600">
+          Open
         </button>
       </div>
-    </div>
+      <div className="mt-5 flex items-center justify-between border-t border-slate-100 pt-4">
+        <button
+          onClick={() => copyRoomId(room.roomId)}
+          className="rounded-xl bg-slate-100 px-3 py-2 text-xs font-bold text-slate-600 hover:bg-slate-200">
+          {copied === room.roomId ? 'Copied' : 'Copy ID'}
+        </button>
+        <p className="text-xs text-slate-400">
+          {room.createdAt ? new Date(room.createdAt).toLocaleDateString() : 'Ready'}
+        </p>
+      </div>
+    </article>
   );
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      {/* Navbar */}
-      <nav className="bg-white shadow-sm px-6 py-4 flex items-center
-                      justify-between">
-        <span className="text-lg font-bold text-indigo-600">CollabApp</span>
-        <div className="flex items-center gap-4">
-          <span className="text-sm text-gray-600">
-            Hi, <strong>{user?.username}</strong>
-          </span>
-          <button onClick={handleLogout}
-            className="text-sm bg-gray-100 hover:bg-gray-200 text-gray-700
-                       px-4 py-2 rounded-lg transition">
-            Logout
-          </button>
+    <div className="app-shell">
+      <header className="sticky top-0 z-20 border-b border-slate-200/80 bg-white/85 backdrop-blur">
+        <div className="mx-auto flex max-w-7xl items-center justify-between px-4 py-4 sm:px-6">
+          <div className="flex items-center gap-3">
+            <div className="h-10 w-10 rounded-2xl bg-blue-600 text-white flex items-center justify-center font-black">
+              IC
+            </div>
+            <div>
+              <p className="font-black leading-tight text-slate-950">InterviewCollab</p>
+              <p className="hidden text-xs text-slate-500 sm:block">Dashboard</p>
+            </div>
+          </div>
+          <div className="flex items-center gap-3">
+            <div className="hidden text-right sm:block">
+              <p className="text-sm font-bold text-slate-900">{user?.username}</p>
+              <p className="text-xs text-slate-500">{user?.email}</p>
+            </div>
+            <button onClick={handleLogout}
+              className="rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-bold text-slate-700 hover:bg-slate-50">
+              Logout
+            </button>
+          </div>
         </div>
-      </nav>
+      </header>
 
-      <main className="max-w-4xl mx-auto mt-10 px-4 pb-16">
-        <h2 className="text-2xl font-bold text-gray-800 mb-8">Dashboard</h2>
+      <main className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:py-8">
+        <section className="dark-surface rounded-[2rem] p-6 text-white sm:p-8">
+          <div className="grid gap-6 lg:grid-cols-[1fr_26rem] lg:items-end">
+            <div>
+              <p className="text-sm font-bold text-blue-300">Professional interview workspace</p>
+              <h1 className="mt-3 max-w-3xl text-3xl font-black tracking-tight sm:text-5xl">
+                Build sharper sessions with rooms, chat, whiteboard, notes, and video.
+              </h1>
+              <div className="mt-6 grid grid-cols-3 gap-3 max-w-xl">
+                <div className="rounded-2xl bg-white/8 p-4">
+                  <p className="text-2xl font-black">{myRooms.length}</p>
+                  <p className="text-xs text-slate-300">Owned</p>
+                </div>
+                <div className="rounded-2xl bg-white/8 p-4">
+                  <p className="text-2xl font-black">{joinedRooms.length}</p>
+                  <p className="text-xs text-slate-300">Joined</p>
+                </div>
+                <div className="rounded-2xl bg-white/8 p-4">
+                  <p className="text-2xl font-black">{myRooms.length + joinedRooms.length}</p>
+                  <p className="text-xs text-slate-300">Total</p>
+                </div>
+              </div>
+            </div>
+
+            <div className="rounded-3xl bg-white p-4 text-slate-950 shadow-2xl">
+              <form onSubmit={handleCreateRoom} className="space-y-3">
+                <label className="block">
+                  <span className="text-sm font-black">Create a room</span>
+                  <input
+                    type="text"
+                    value={roomName}
+                    onChange={(e) => setRoomName(e.target.value)}
+                    placeholder="Mock interview, DSA practice..."
+                    className="focus-ring mt-2 w-full rounded-2xl border border-slate-200 px-4 py-3 text-sm"
+                  />
+                </label>
+                <button type="submit" disabled={creating || !roomName.trim()}
+                  className="w-full rounded-2xl bg-blue-600 py-3 text-sm font-black text-white hover:bg-blue-700 disabled:opacity-60">
+                  {creating ? 'Creating...' : 'Create room'}
+                </button>
+              </form>
+            </div>
+          </div>
+        </section>
 
         {error && (
-          <div className="bg-red-50 border border-red-200 text-red-600
-                          text-sm rounded-lg px-4 py-3 mb-6">
+          <div className="mt-5 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-bold text-red-700">
             {error}
           </div>
         )}
 
-        {/* Create + Join */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-10">
-          <div className="bg-white rounded-2xl shadow-sm border
-                          border-gray-100 p-6">
-            <h3 className="text-lg font-semibold text-gray-800 mb-1">
-              Create a Room
-            </h3>
-            <p className="text-sm text-gray-500 mb-4">
-              Start a new collaboration space.
-            </p>
-            <form onSubmit={handleCreateRoom} className="space-y-3">
+        <section className="mt-6 grid gap-6 lg:grid-cols-[24rem_1fr]">
+          <aside className="surface rounded-3xl p-5">
+            <h2 className="text-lg font-black text-slate-950">Join room</h2>
+            <p className="mt-1 text-sm text-slate-500">Paste a room ID or invite link. The owner will approve your request.</p>
+            <form onSubmit={handleJoinRoom} className="mt-5 space-y-3">
               <input
                 type="text"
-                id="roomName"
-                name="roomName"
-                value={roomName}
-                onChange={(e) => setRoomName(e.target.value)}
-                placeholder="e.g. Design Review, Sprint Planning..."
-                className="w-full border border-gray-300 rounded-lg px-4
-                           py-2.5 text-sm focus:outline-none
-                           focus:ring-2 focus:ring-indigo-500"
-              />
-              <button type="submit" disabled={creating || !roomName.trim()}
-                className="w-full bg-indigo-600 hover:bg-indigo-700
-                           text-white font-medium py-2.5 rounded-lg
-                           text-sm transition disabled:opacity-60">
-                {creating ? 'Creating...' : '+ Create Room'}
-              </button>
-            </form>
-          </div>
-
-          <div className="bg-white rounded-2xl shadow-sm border
-                          border-gray-100 p-6">
-            <h3 className="text-lg font-semibold text-gray-800 mb-1">
-              Join a Room
-            </h3>
-            <p className="text-sm text-gray-500 mb-4">
-              Paste a Room ID or full link.
-            </p>
-            <form onSubmit={handleJoinRoom} className="space-y-3">
-              <input
-                type="text"
-                id="joinId"
-                name="joinId"
                 value={joinId}
                 onChange={(e) => setJoinId(e.target.value)}
-                placeholder="Paste Room ID or link here..."
-                className="w-full border border-gray-300 rounded-lg px-4
-                           py-2.5 text-sm focus:outline-none
-                           focus:ring-2 focus:ring-indigo-500"
+                placeholder="Room ID or link"
+                className="focus-ring w-full rounded-2xl border border-slate-200 px-4 py-3 text-sm"
               />
               <button type="submit" disabled={joining || !joinId.trim()}
-                className="w-full bg-emerald-600 hover:bg-emerald-700
-                           text-white font-medium py-2.5 rounded-lg
-                           text-sm transition disabled:opacity-60">
-                {joining ? 'Joining...' : '→ Join Room'}
+                className="w-full rounded-2xl bg-emerald-600 py-3 text-sm font-black text-white hover:bg-emerald-700 disabled:opacity-60">
+                {joining ? 'Sending request...' : 'Request access'}
               </button>
             </form>
-          </div>
-        </div>
 
-        {/* My Rooms */}
-        <div className="mb-8">
-          <h3 className="text-lg font-semibold text-gray-800 mb-4">
-            My Rooms
-          </h3>
-          {loadingRooms ? (
-            <p className="text-gray-400 text-sm text-center py-8">
-              Loading...
-            </p>
-          ) : myRooms.length === 0 ? (
-            <div className="bg-white rounded-2xl border border-gray-100
-                            shadow-sm text-center py-10 text-gray-400 text-sm">
-              You haven't created any rooms yet.
+            <div className="mt-6 rounded-2xl bg-slate-50 p-4">
+              <p className="text-sm font-black text-slate-900">Room safety</p>
+              <p className="mt-1 text-xs leading-5 text-slate-500">
+                Direct entry is disabled. Admin approval protects interview sessions from unwanted joins.
+              </p>
             </div>
-          ) : (
-            <div className="space-y-3">
-              {myRooms.map((room) => (
-                <RoomCard key={room.roomId} room={room} />
-              ))}
-            </div>
-          )}
-        </div>
+          </aside>
 
-        {/* Joined Rooms */}
-        {joinedRooms.length > 0 && (
-          <div>
-            <h3 className="text-lg font-semibold text-gray-800 mb-4">
-              Joined Rooms
-            </h3>
-            <div className="space-y-3">
-              {joinedRooms.map((room) => (
-                <RoomCard key={room.roomId} room={room} />
-              ))}
+          <section>
+            <div className="flex items-center justify-between gap-4">
+              <div>
+                <h2 className="text-xl font-black text-slate-950">Your rooms</h2>
+                <p className="text-sm text-slate-500">Continue an interview, prep room, or team session.</p>
+              </div>
             </div>
-          </div>
-        )}
+
+            {loadingRooms ? (
+              <div className="mt-5 grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+                {[1, 2, 3].map((item) => (
+                  <div key={item} className="h-40 animate-pulse rounded-3xl bg-white border border-slate-200" />
+                ))}
+              </div>
+            ) : myRooms.length + joinedRooms.length === 0 ? (
+              <div className="surface mt-5 rounded-3xl p-10 text-center">
+                <p className="text-lg font-black text-slate-900">No rooms yet</p>
+                <p className="mt-2 text-sm text-slate-500">Create a room or request access to one to get started.</p>
+              </div>
+            ) : (
+              <div className="mt-5 grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+                {myRooms.map((room) => <RoomCard key={room.roomId} room={room} owned />)}
+                {joinedRooms.map((room) => <RoomCard key={room.roomId} room={room} />)}
+              </div>
+            )}
+          </section>
+        </section>
       </main>
     </div>
   );

@@ -7,6 +7,8 @@ import org.springframework.messaging.handler.annotation.*;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.stereotype.Controller;
 
+import com.collabapp.service.RoomService;
+
 import java.security.Principal;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
@@ -17,6 +19,7 @@ import java.util.concurrent.ConcurrentHashMap;
 public class WhiteboardController {
 
     private final SimpMessagingTemplate messagingTemplate;
+    private final RoomService roomService;
 
     // In-memory canvas history: roomId → list of draw events
     // Capped at 2000 strokes per room to prevent memory bloat
@@ -36,19 +39,26 @@ public class WhiteboardController {
                 ? principal.getName()
                 : message.getUsername();
 
+        if (username == null || username.isBlank()) {
+            return;
+        }
+        roomService.assertCanAccess(roomId, username);
+
         message.setUsername(username);
         message.setRoomId(roomId);
 
         if (message.getAction() == WhiteboardMessage.ActionType.DRAW) {
             // Save stroke to history
             canvasHistory
-                .computeIfAbsent(roomId, k -> new ArrayList<>())
+                .computeIfAbsent(roomId, k -> Collections.synchronizedList(new ArrayList<>()))
                 .add(message);
 
             // Cap history size
             List<WhiteboardMessage> history = canvasHistory.get(roomId);
-            if (history.size() > MAX_HISTORY) {
-                history.remove(0);
+            synchronized (history) {
+                if (history.size() > MAX_HISTORY) {
+                    history.remove(0);
+                }
             }
 
             // Broadcast stroke to everyone in the room
@@ -68,7 +78,7 @@ public class WhiteboardController {
         } else if (message.getAction() == WhiteboardMessage.ActionType.HISTORY_REQ) {
             // A new user joined and wants the current canvas state
             List<WhiteboardMessage> history =
-                canvasHistory.getOrDefault(roomId, new ArrayList<>());
+                canvasHistory.getOrDefault(roomId, Collections.emptyList());
 
             // Send history only to the requesting user's personal queue
             WhiteboardMessage response = new WhiteboardMessage();
@@ -76,11 +86,13 @@ public class WhiteboardController {
             response.setRoomId(roomId);
 
             // Send each stroke individually so frontend can replay them
+            synchronized (history) {
             for (WhiteboardMessage stroke : history) {
                 messagingTemplate.convertAndSendToUser(
                     username,
                     "/queue/whiteboard-history",
                     stroke);
+            }
             }
 
             log.info("Sent {} history strokes to {} in room {}",

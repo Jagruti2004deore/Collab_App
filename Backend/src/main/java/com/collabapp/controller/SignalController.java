@@ -9,6 +9,7 @@ import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.stereotype.Controller;
 
 import com.collabapp.dto.SignalMessage;
+import com.collabapp.service.RoomService;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -19,9 +20,8 @@ import lombok.extern.slf4j.Slf4j;
 public class SignalController {
 
     private final SimpMessagingTemplate messagingTemplate;
+    private final RoomService roomService;
 
-    // All WebRTC signals go through /app/signal/{roomId}
-    // The server just forwards them to the target user
     @MessageMapping("/signal/{roomId}")
     public void handleSignal(
             @DestinationVariable String roomId,
@@ -29,21 +29,24 @@ public class SignalController {
             Principal principal) {
 
         if (principal == null) return;
+        roomService.assertCanAccess(roomId, principal.getName());
 
-        // Always stamp the real sender username from the JWT
         signal.setFrom(principal.getName());
         signal.setRoomId(roomId);
 
         String targetUser = signal.getTo();
         if (targetUser == null || targetUser.isBlank()) {
-            log.warn("Signal has no target user — dropping");
+            log.warn("Signal has no target user - dropping");
+            return;
+        }
+        if (!roomService.canAccess(roomId, targetUser)) {
+            log.warn("Signal target {} is not approved for room {}", targetUser, roomId);
             return;
         }
 
-        log.info("[Signal] {} → {} : {}",
+        log.info("[Signal] {} -> {} : {}",
             signal.getFrom(), targetUser, signal.getType());
 
-        // Forward directly to the target user's personal queue
         messagingTemplate.convertAndSendToUser(
             targetUser,
             "/queue/signal",
