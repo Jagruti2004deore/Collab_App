@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import api from '../api/axios';
 
 const STARTER_CODE = {
   javascript: `function twoSum(nums, target) {
@@ -46,6 +47,7 @@ export default function CodeEditor({ roomId, currentUser, stompClient, connected
   const [language, setLanguage] = useState('javascript');
   const [code, setCode] = useState(STARTER_CODE.javascript);
   const [output, setOutput] = useState('Output will appear here.');
+  const [running, setRunning] = useState(false);
   const [updatedBy, setUpdatedBy] = useState('');
   const [updatedAt, setUpdatedAt] = useState('');
   const subsRef = useRef([]);
@@ -134,25 +136,34 @@ export default function CodeEditor({ roomId, currentUser, stompClient, connected
     publishCode(language, nextCode);
   };
 
-  const runCode = () => {
-    if (language !== 'javascript') {
-      setOutput(
-        `${languageLabel} execution needs a secure backend sandbox. The live editor is ready for Java, C++, Python and C, but running those languages should be connected to a Docker/Judge0 worker before production.`
-      );
-      return;
-    }
+  const runCode = async () => {
+    setRunning(true);
+    setOutput(`Running ${languageLabel}...`);
 
-    const logs = [];
-    const originalLog = console.log;
     try {
-      console.log = (...args) => logs.push(args.map(String).join(' '));
-      // Browser-only JavaScript runner for interview snippets.
-      new Function(code)();
-      setOutput(logs.length ? logs.join('\n') : 'Program finished without output.');
+      const { data } = await api.post(`/api/rooms/${roomId}/code/execute`, {
+        language,
+        code,
+      });
+
+      const sections = [];
+      sections.push(`Status: ${data.status || 'Completed'}`);
+      if (data.timeMs !== undefined && data.timeMs !== null) {
+        sections.push(`Time: ${data.timeMs} ms`);
+      }
+      if (data.compileOutput) sections.push(`Compile:\n${data.compileOutput}`);
+      if (data.stdout) sections.push(`Output:\n${data.stdout}`);
+      if (data.stderr) sections.push(`Errors:\n${data.stderr}`);
+      if (!data.compileOutput && !data.stdout && !data.stderr && data.message) {
+        sections.push(data.message);
+      }
+
+      setOutput(sections.join('\n\n') || 'Program finished without output.');
     } catch (e) {
-      setOutput(e.message);
+      const message = e.response?.data?.message || e.response?.data?.stderr || e.message || 'Execution failed.';
+      setOutput(message);
     } finally {
-      console.log = originalLog;
+      setRunning(false);
     }
   };
 
@@ -207,13 +218,14 @@ export default function CodeEditor({ roomId, currentUser, stompClient, connected
           </select>
           <button
             onClick={runCode}
-            className="rounded-2xl bg-emerald-500 px-4 py-2 text-xs font-black text-slate-950 hover:bg-emerald-400">
-            Run
+            disabled={running}
+            className="rounded-2xl bg-emerald-500 px-4 py-2 text-xs font-black text-slate-950 hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-60">
+            {running ? 'Running...' : 'Run'}
           </button>
           <button
             onClick={saveCode}
             className="rounded-2xl bg-blue-500 px-4 py-2 text-xs font-black text-white hover:bg-blue-400">
-            Save code
+            Download code
           </button>
         </div>
       </div>
