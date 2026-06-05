@@ -17,7 +17,7 @@ public class WebConfig implements WebMvcConfigurer {
     public CorsConfigurationSource corsConfigurationSource() {
         CorsConfiguration config = new CorsConfiguration();
 
-        // Allow ALL origins — fixes any domain mismatch
+        // Allow all origins so deployed frontend/backend domain changes keep working.
         config.setAllowedOriginPatterns(List.of("*"));
 
         config.setAllowedMethods(Arrays.asList(
