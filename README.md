@@ -479,7 +479,7 @@ Please follow the existing code style. Backend: standard Java conventions with L
 
 **Jagruti Vijay Deore (Anvi)**  
 B.Tech Computer Science Engineering — Sandip University, Nashik (2026)  
-[LinkedIn](https://linkedin.com/in/your-profile) · [GitHub](https://github.com/your-username)
+[LinkedIn](https://www.linkedin.com/in/jagruti-deore/) · [GitHub](https://github.com/Jagruti2004deore)
 
 ---
 
