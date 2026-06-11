@@ -122,10 +122,10 @@ export default function DashboardPage() {
         <div className="mx-auto flex max-w-7xl items-center justify-between px-4 py-4 sm:px-6">
           <div className="flex items-center gap-3">
             <div className="h-10 w-10 rounded-2xl bg-blue-600 text-white flex items-center justify-center font-black">
-              IC
+              CA
             </div>
             <div>
-              <p className="font-black leading-tight text-slate-950">InterviewCollab</p>
+              <p className="font-black leading-tight text-slate-950">CollabApp</p>
               <p className="hidden text-xs text-slate-500 sm:block">Dashboard</p>
             </div>
           </div>
@@ -146,9 +146,9 @@ export default function DashboardPage() {
         <section className="dark-surface rounded-[2rem] p-6 text-white sm:p-8">
           <div className="grid gap-6 lg:grid-cols-[1fr_26rem] lg:items-end">
             <div>
-              <p className="text-sm font-bold text-blue-300">Professional interview workspace</p>
+              <p className="text-sm font-bold text-blue-300">Professional workspace</p>
               <h1 className="mt-3 max-w-3xl text-3xl font-black tracking-tight sm:text-5xl">
-                Build sharper sessions with rooms, chat, whiteboard, notes, and video.
+                Build sharper sessions with rooms, chat, whiteboard, notes, code, and video.
               </h1>
               <div className="mt-6 grid grid-cols-3 gap-3 max-w-xl">
                 <div className="rounded-2xl bg-white/8 p-4">
@@ -214,7 +214,7 @@ export default function DashboardPage() {
             <div className="mt-6 rounded-2xl bg-slate-50 p-4">
               <p className="text-sm font-black text-slate-900">Room safety</p>
               <p className="mt-1 text-xs leading-5 text-slate-500">
-                Direct entry is disabled. Admin approval protects interview sessions from unwanted joins.
+                Direct entry is disabled. Admin approval protects sessions from unwanted joins.
               </p>
             </div>
           </aside>
