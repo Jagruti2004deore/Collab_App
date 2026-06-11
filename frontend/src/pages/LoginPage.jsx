@@ -30,11 +30,11 @@ export default function LoginPage() {
       <section className="hidden lg:flex flex-col justify-between p-10 text-white bg-slate-950">
         <div className="flex items-center gap-3">
           <div className="h-10 w-10 rounded-2xl bg-blue-500 flex items-center justify-center font-black">
-            IC
+            CA
           </div>
           <div>
-            <p className="font-bold leading-tight">InterviewCollab</p>
-            <p className="text-xs text-slate-400">Realtime interview workspace</p>
+            <p className="font-bold leading-tight">CollabApp</p>
+            <p className="text-xs text-slate-400">Realtime workspace</p>
           </div>
         </div>
 
